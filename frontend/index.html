@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>L'Open Space</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  --bg:#3d2b22; --frame:#5b3a29; --frame-hi:#8a5a3b; --shadow:#24170f;
+  --panel:#f1dcae; --panel-2:#e2c286; --ink:#3b2a20; --ink-soft:#735646;
+  --leaf:#4f8a3d; --gold:#e8b23a; --berry:#c8475f; --sky:#5aa9c9; --on-frame:#f7e7c4;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#1b1726; --frame:#3a2f4d; --frame-hi:#57476f; --shadow:#0f0b16;
+    --panel:#e3cf9f; --panel-2:#c9ad76; --on-frame:#efe2ff;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#1b1726; --frame:#3a2f4d; --frame-hi:#57476f; --shadow:#0f0b16;
+  --panel:#e3cf9f; --panel-2:#c9ad76; --on-frame:#efe2ff;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pixelify Sans",ui-monospace,"Courier New",monospace;font-size:16px;line-height:1.35;
+  background-image:linear-gradient(45deg,rgba(0,0,0,.08) 25%,transparent 25%,transparent 75%,rgba(0,0,0,.08) 75%),linear-gradient(45deg,rgba(0,0,0,.08) 25%,transparent 25%,transparent 75%,rgba(0,0,0,.08) 75%);
+  background-size:16px 16px;background-position:0 0,8px 8px}
+.app{max-width:1220px;margin:0 auto;padding:12px}
+.topbar{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;background:var(--frame);color:var(--on-frame);
+  padding:10px 14px;border:3px solid var(--shadow);box-shadow:inset 0 0 0 2px var(--frame-hi),0 4px 0 var(--shadow)}
+.brand h1{margin:0;font-size:1.7rem;font-weight:700;line-height:1}
+.brand p{margin:4px 0 0;font-size:.95rem;opacity:.8}
+.stats{display:flex;flex-wrap:wrap;gap:6px}
+.stat{background:var(--shadow);padding:5px 10px;min-width:92px;display:flex;flex-direction:column}
+.stat span{font-size:.8rem;opacity:.75}
+.stat b{font-size:1.15rem;font-weight:600}
+.mode{font-size:.85rem;padding:3px 8px;background:var(--gold);color:var(--ink);align-self:center}
+.mode.live{background:var(--leaf);color:#fff}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"stage side" "log side";gap:14px;margin-top:14px;align-items:start}
+.layout>.stage{grid-area:stage}.layout>aside{grid-area:side}.layout>.logpanel{grid-area:log;margin:0}
+@media (max-width:880px){.layout{grid-template-columns:1fr;grid-template-areas:"stage" "side" "log"}}
+@media (max-width:560px){.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}.stat{min-width:0;padding:4px 6px}.stat span{font-size:.72rem}.stat b{font-size:1rem}.mode{grid-column:1/-1;justify-self:start}.brand h1{font-size:1.4rem}}
+.stage{background:var(--frame);border:3px solid var(--shadow);box-shadow:inset 0 0 0 3px var(--frame-hi),0 4px 0 var(--shadow);padding:7px}
+#office{display:block;width:100%;height:auto;aspect-ratio:240/176;image-rendering:pixelated;image-rendering:crisp-edges;background:#c8925e}
+.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 12px;margin:8px 4px 2px;color:var(--on-frame);font-size:.85rem;opacity:.9}
+.legend div{display:flex;gap:6px;align-items:center}
+.sw{width:10px;height:10px;flex:none;box-shadow:0 0 0 1px var(--shadow)}
+.panel{background:var(--panel);border:3px solid var(--shadow);box-shadow:inset 0 0 0 2px var(--panel-2),0 4px 0 var(--shadow);padding:10px 12px 12px;margin-bottom:14px}
+.panel h2{margin:0 0 8px;font-size:1.15rem;font-weight:600}
+.panel p.hint{margin:0 0 8px;color:var(--ink-soft);font-size:.9rem}
+form.new{display:flex;gap:6px}
+input,button{font:inherit}
+input[type=text]{flex:1;min-width:0;background:#fff8e6;color:var(--ink);border:2px solid var(--shadow);padding:6px 8px}
+button{cursor:pointer;border:2px solid var(--shadow);padding:6px 12px;background:var(--panel-2);color:var(--ink);box-shadow:0 3px 0 var(--shadow)}
+button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--shadow)}
+button.primary{background:var(--leaf);color:#fff}
+button.danger{background:var(--berry);color:#fff}
+:focus-visible{outline:2px dashed var(--gold);outline-offset:2px}
+ul{list-style:none;margin:0;padding:0}
+.tickets li{display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:2px dotted var(--panel-2);font-size:.95rem}
+.tickets li:last-child{border-bottom:0}
+.tag{flex:none;font-size:.8rem;padding:1px 6px;background:var(--panel-2);align-self:flex-start}
+.tag.cours{background:var(--sky);color:#fff}
+.tag.fait{background:var(--leaf);color:#fff}
+.tag.echec{background:var(--berry);color:#fff}
+.empty{color:var(--ink-soft);font-size:.9rem}
+.team li{display:grid;grid-template-columns:34px 1fr;gap:4px 10px;padding:6px 0;border-bottom:2px dotted var(--panel-2)}
+.team li:last-child{border-bottom:0}
+.team canvas{width:34px;height:42px;image-rendering:pixelated;grid-row:span 3;background:var(--panel-2);box-shadow:0 0 0 2px var(--shadow)}
+.team .name{font-weight:600}
+.team .status{font-size:.88rem;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--ink-soft)}
+.bar i{display:block;flex:1;height:8px;background:#fff8e6;box-shadow:0 0 0 2px var(--shadow);position:relative}
+.bar i b{position:absolute;inset:0 auto 0 0;background:var(--leaf)}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.kpi{background:#fff8e6;box-shadow:0 0 0 2px var(--panel-2);padding:6px 8px}
+.kpi span{display:block;font-size:.8rem;color:var(--ink-soft)}
+.kpi b{font-size:1.2rem;font-weight:600}
+.deliv{margin-top:8px;font-size:.88rem}
+.deliv li{padding:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log{max-height:260px;overflow:auto;font-size:.9rem}
+.log li{padding:3px 0;border-bottom:1px dotted var(--panel-2)}
+.log time{color:var(--ink-soft);margin-right:6px}
+.modal{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px));pointer-events:none;z-index:10}
+.modal[hidden]{display:none}
+.modal .card{pointer-events:auto;width:min(520px,100%);display:grid;grid-template-columns:64px 1fr;gap:10px 14px;background:var(--panel);border:3px solid var(--shadow);
+  box-shadow:inset 0 0 0 3px var(--gold),0 6px 0 var(--shadow);padding:14px;animation:pop .18s steps(3)}
+@keyframes pop{from{transform:translateY(24px)}to{transform:none}}
+@media (prefers-reduced-motion:reduce){.modal .card{animation:none}}
+.modal canvas{width:64px;height:80px;image-rendering:pixelated;background:var(--panel-2);box-shadow:0 0 0 2px var(--shadow)}
+.modal h2{margin:0;font-size:1.2rem}
+.modal p{margin:4px 0}
+.modal code{display:block;background:#2f3542;color:#b5f5a5;padding:6px 8px;font-family:ui-monospace,"Courier New",monospace;font-size:.9rem;overflow-x:auto;white-space:pre}
+.modal .actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px}
+.toggle{display:flex;align-items:center;gap:6px;font-size:.9rem;margin-top:8px;color:var(--ink-soft)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <h1>L'Open Space</h1>
+      <p>Ton équipe Claude Code, au bureau</p>
+    </div>
+    <div class="stats" aria-live="polite">
+      <div class="stat"><span>Heure</span><b id="sClock">09:00</b></div>
+      <div class="stat"><span>Dépensé</span><b id="sCost">0,00 $</b></div>
+      <div class="stat"><span>Tokens</span><b id="sTokens">0</b></div>
+      <div class="stat"><span>Tickets livrés</span><b id="sDone">0</b></div>
+      <span class="mode" id="mode">Démo</span>
+    </div>
+  </header>
+
+  <main class="layout">
+      <div class="stage">
+        <canvas id="office" aria-label="Vue de l'open space"></canvas>
+        <div class="legend">
+          <div><i class="sw" style="background:#6e4630"></i>Archives : lecture de fichiers</div>
+          <div><i class="sw" style="background:#f4efe4"></i>Kanban : liste de tâches</div>
+          <div><i class="sw" style="background:#353d4f"></i>Salle serveur : commandes</div>
+          <div><i class="sw" style="background:#5aa9c9"></i>Coin veille : recherche web</div>
+          <div><i class="sw" style="background:#a0673f"></i>Table de réunion : sous-agents</div>
+          <div><i class="sw" style="background:#c8475f"></i>Ton bureau : validations</div>
+        </div>
+      </div>
+
+    <aside>
+      <div class="panel">
+        <h2>Tickets</h2>
+        <form class="new" id="newTicket">
+          <input type="text" id="ticketTitle" placeholder="Décris la demande…" aria-label="Nouvelle demande" autocomplete="off">
+          <button class="primary" type="submit">Créer</button>
+        </form>
+        <ul class="tickets" id="tickets" style="margin-top:8px"></ul>
+        <label class="toggle" id="autoWrap"><input type="checkbox" id="auto" checked> Des clients envoient des demandes</label>
+      </div>
+      <div class="panel">
+        <h2>Équipe</h2>
+        <ul class="team" id="team"></ul>
+      </div>
+      <div class="panel">
+        <h2>Direction</h2>
+        <div class="kpis">
+          <div class="kpi"><span>Coût moyen par ticket</span><b id="kAvg">–</b></div>
+          <div class="kpi"><span>Validations refusées</span><b id="kDeny">0 / 0</b></div>
+          <div class="kpi"><span>Livrables</span><b id="kDeliv">0</b></div>
+          <div class="kpi"><span>Pauses café</span><b id="kCoffee">0</b></div>
+        </div>
+        <ul class="deliv" id="deliv"></ul>
+      </div>
+    </aside>
+    <div class="panel logpanel">
+      <h2>Journal</h2>
+      <ul class="log" id="log"></ul>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="perm" hidden role="dialog" aria-modal="false" aria-labelledby="permTitle">
+  <div class="card">
+    <canvas id="portrait" width="16" height="20"></canvas>
+    <div>
+      <h2 id="permTitle">Quelqu'un frappe à ta porte</h2>
+      <p id="permText"></p>
+      <code id="permCmd"></code>
+    </div>
+    <div class="actions">
+      <button class="danger" id="deny" type="button">Refuser</button>
+      <button class="primary" id="allow" type="button">Autoriser</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const $ = s => document.querySelector(s);
+const W = 240, H = 176;
+const cv = $("#office"), ctx = cv.getContext("2d");
+cv.width = W; cv.height = H; ctx.imageSmoothingEnabled = false;
+const R = (c, x, y, w, h, col) => { c.fillStyle = col; c.fillRect(Math.round(x), Math.round(y), w, h); };
+
+/* ---------- Décor statique ---------- */
+let seed = 11;
+const srand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const DESKS = [[72, 58], [112, 58], [72, 90], [112, 90]];
+const SEATS = DESKS.map(([x, y]) => ({ x: x + 16, y: y + 26, face: "up" }));
+
+function plant(b, x, y) {
+  R(b, x - 3, y - 5, 7, 6, "#b56a3c"); R(b, x - 3, y - 5, 7, 1, "#cf8452");
+  R(b, x - 5, y - 11, 10, 6, "#4f8a3d"); R(b, x - 3, y - 14, 6, 4, "#6aa84f"); R(b, x - 1, y - 16, 2, 3, "#86c266");
+}
+function desk(b, x, y) {
+  R(b, x, y, 32, 12, "#a0673f"); R(b, x, y, 32, 1, "#c08552"); R(b, x, y + 12, 32, 4, "#6e4630");
+  R(b, x + 2, y + 16, 2, 3, "#4e3122"); R(b, x + 28, y + 16, 2, 3, "#4e3122");
+  R(b, x + 10, y - 5, 12, 8, "#232833"); R(b, x + 11, y - 4, 10, 6, "#353d4f"); R(b, x + 15, y + 3, 2, 2, "#232833");
+  R(b, x + 10, y + 6, 12, 2, "#e4e0d6"); R(b, x + 25, y + 4, 3, 3, "#f4efe4"); R(b, x + 3, y + 3, 5, 6, "#f4efe4"); R(b, x + 4, y + 4, 3, 1, "#c9c0ae");
+  R(b, x + 12, y + 20, 8, 7, "#3d4557"); R(b, x + 12, y + 20, 8, 2, "#4d5872");
+}
+const bg = document.createElement("canvas"); bg.width = W; bg.height = H;
+(function paint() {
+  const b = bg.getContext("2d");
+  R(b, 0, 0, W, H, "#c8925e");
+  for (let y = 32; y < H; y += 8) {
+    R(b, 0, y, W, 1, "#ad7744"); R(b, 0, y + 1, W, 1, "#d39c66");
+    const off = (y / 8) % 2 ? 0 : 12;
+    for (let x = off; x < W; x += 24) R(b, x, y, 1, 8, "#ad7744");
+  }
+  R(b, 0, 0, W, 28, "#7fb3a0"); for (let x = 0; x < W; x += 8) R(b, x, 0, 3, 28, "#74a894");
+  R(b, 0, 26, W, 4, "#5b3a29"); R(b, 0, 26, W, 1, "#8a5a3b");
+  // salle serveur
+  R(b, 172, 0, 68, 26, "#4d5872"); for (let x = 172; x < W; x += 8) R(b, x, 0, 1, 26, "#44506a");
+  R(b, 172, 30, 68, 50, "#8795a8");
+  for (let x = 172; x < W; x += 8) R(b, x, 30, 1, 50, "#77859a");
+  for (let y = 30; y < 80; y += 8) R(b, 172, y, 68, 1, "#77859a");
+  for (let i = 0; i < 3; i++) {
+    const x = 178 + i * 20;
+    R(b, x, 8, 15, 36, "#232833"); R(b, x + 1, 9, 13, 34, "#353d4f");
+    for (let s = 0; s < 6; s++) R(b, x + 2, 11 + s * 5, 8, 2, "#2a3040");
+    R(b, x, 44, 15, 2, "#1a1e27");
+  }
+  const glass = (x, y, w, h) => { R(b, x, y, w, h, "#9fd0e0"); R(b, x, y, w, 1, "#e6f6fb"); };
+  glass(170, 26, 3, 14); glass(170, 58, 3, 24); glass(170, 79, 70, 3);
+  // tapis du manager
+  R(b, 166, 114, 72, 60, "#9a3346"); R(b, 168, 116, 68, 56, "#c8475f");
+  for (let x = 171; x < 234; x += 6) { R(b, x, 119, 3, 1, "#e8b23a"); R(b, x, 168, 3, 1, "#e8b23a"); }
+  // coin veille
+  R(b, 4, 64, 46, 42, "#4b8fab"); R(b, 6, 66, 42, 38, "#5aa9c9");
+  for (let y = 70; y < 102; y += 6) R(b, 8, y, 38, 1, "#6db8d6");
+  R(b, 10, 72, 16, 15, "#9a3346"); R(b, 12, 76, 12, 10, "#c8475f"); R(b, 10, 72, 16, 4, "#7e2a3a");
+  R(b, 30, 80, 13, 8, "#6e4630"); R(b, 30, 80, 13, 2, "#a0673f");
+  R(b, 32, 75, 9, 6, "#d0d4dc"); R(b, 33, 76, 7, 4, "#5aa9c9");
+  R(b, 12, 94, 2, 7, "#6e4630"); R(b, 8, 88, 10, 8, "#3f7fa0"); R(b, 10, 89, 4, 3, "#5e9c4a"); R(b, 13, 93, 4, 2, "#5e9c4a"); R(b, 8, 100, 10, 2, "#6e4630");
+  // paillasson
+  R(b, 147, 168, 22, 8, "#6e4630"); R(b, 149, 170, 18, 4, "#8a5a3b");
+  // étagères d'archives
+  const bookCols = ["#c8475f", "#5aa9c9", "#e8b23a", "#5e9c4a", "#f4efe4", "#8f6bb3"];
+  for (let i = 0; i < 3; i++) {
+    const x = 6 + i * 24, y = 5;
+    R(b, x, y, 22, 32, "#6e4630"); R(b, x + 1, y + 1, 20, 30, "#4e3122");
+    for (let r = 0; r < 3; r++) {
+      const sy = y + 2 + r * 10; let bx = x + 2;
+      while (bx < x + 18) {
+        const bw = 2 + Math.floor(srand() * 2), bh = 5 + Math.floor(srand() * 3);
+        R(b, bx, sy + 8 - bh, bw, bh, bookCols[Math.floor(srand() * bookCols.length)]);
+        bx += bw + (srand() < .25 ? 1 : 0);
+      }
+      R(b, x + 1, sy + 8, 20, 2, "#6e4630");
+    }
+    R(b, x, y + 32, 22, 3, "#3b2519");
+  }
+  // Kanban
+  R(b, 86, 4, 64, 24, "#8a5a3b"); R(b, 88, 6, 60, 20, "#f4efe4");
+  R(b, 107, 6, 1, 20, "#d8cfbf"); R(b, 127, 6, 1, 20, "#d8cfbf");
+  // horloge murale
+  R(b, 156, 8, 10, 10, "#5b3a29"); R(b, 157, 9, 8, 8, "#f4efe4"); R(b, 160, 10, 1, 4, "#3b2a20"); R(b, 160, 13, 3, 1, "#3b2a20");
+  DESKS.forEach(([x, y]) => desk(b, x, y));
+  // table de réunion
+  R(b, 70, 138, 68, 14, "#6e4630"); R(b, 70, 136, 68, 12, "#a0673f"); R(b, 72, 137, 64, 1, "#c08552");
+  R(b, 84, 140, 6, 4, "#f4efe4"); R(b, 112, 141, 6, 4, "#f4efe4");
+  [76, 92, 108, 124].forEach(x => { R(b, x, 153, 8, 6, "#3d4557"); R(b, x, 153, 8, 2, "#4d5872"); });
+  // coin café
+  R(b, 4, 128, 36, 12, "#6e4630"); R(b, 4, 126, 36, 4, "#a0673f");
+  R(b, 8, 114, 11, 13, "#2f3542"); R(b, 9, 115, 9, 4, "#4d5872"); R(b, 16, 121, 1, 1, "#c8475f"); R(b, 11, 123, 5, 3, "#f4efe4");
+  R(b, 23, 122, 4, 4, "#f4efe4"); R(b, 29, 122, 4, 4, "#c8475f"); R(b, 34, 121, 4, 5, "#e8b23a");
+  R(b, 6, 152, 36, 18, "#3f6e31"); R(b, 8, 157, 32, 11, "#5e9c4a"); R(b, 6, 152, 36, 5, "#3f6e31");
+  plant(b, 80, 42); plant(b, 160, 44); plant(b, 56, 170); plant(b, 232, 108); plant(b, 46, 118);
+})();
+
+/* ---------- Personnages ---------- */
+function person(c, x, y, p, t, moving, dir) {
+  x = Math.round(x); y = Math.round(y);
+  R(c, x - 4, y - 1, 8, 2, "rgba(40,20,10,.25)");
+  const st = moving ? Math.floor(t / 140) % 2 : 0;
+  R(c, x - 3, y - 4, 2, st ? 3 : 4, p.pants); R(c, x + 1, y - 4, 2, st ? 4 : 3, p.pants);
+  R(c, x - 3, y - 1 - (st ? 1 : 0), 2, 1, "#2b1d16"); R(c, x + 1, y - 1 - (st ? 0 : 1), 2, 1, "#2b1d16");
+  R(c, x - 3, y - 9, 6, 5, p.shirt); R(c, x - 4, y - 8, 1, 3, p.shirt); R(c, x + 3, y - 8, 1, 3, p.shirt);
+  R(c, x - 4, y - 5, 1, 1, p.skin); R(c, x + 3, y - 5, 1, 1, p.skin);
+  R(c, x - 3, y - 14, 6, 5, p.skin);
+  if (dir === "up") { R(c, x - 3, y - 15, 6, 5, p.hair); R(c, x - 2, y - 10, 4, 1, p.hair); }
+  else {
+    R(c, x - 3, y - 15, 6, 2, p.hair); R(c, x - 3, y - 13, 1, 2, p.hair); R(c, x + 2, y - 13, 1, 2, p.hair);
+    R(c, x - 2, y - 12, 1, 1, "#2b1d16"); R(c, x + 1, y - 12, 1, 1, "#2b1d16");
+  }
+}
+const GLYPHS = {
+  think: ["00000", "00000", "00000", "10101", "00000"],
+  ask: ["00100", "00100", "00100", "00000", "00100"],
+  read: ["11110", "10010", "11110", "10010", "11110"],
+  edit: ["00011", "00111", "01110", "11100", "11000"],
+  bash: ["10000", "01000", "00100", "01000", "10111"],
+  web: ["01110", "10101", "11111", "10101", "01110"],
+  todo: ["00000", "00001", "10010", "01100", "00000"],
+  coffee: ["01010", "00000", "11110", "11101", "11110"],
+  agent: ["01010", "01010", "00000", "11011", "11011"],
+};
+const GLYPH_COL = { think: "#735646", ask: "#c8475f", read: "#8a5a3b", edit: "#3f7fa0", bash: "#2f3542", web: "#3f7fa0", todo: "#4f8a3d", coffee: "#6e4630", agent: "#8f6bb3" };
+function bubble(x, y, icon, t) {
+  if (!icon) return;
+  if (icon === "ask" && Math.floor(t / 300) % 2) return;
+  const bx = Math.round(x) - 5, by = Math.round(y) - 26;
+  R(ctx, bx, by, 11, 9, "#3b2a20"); R(ctx, bx + 1, by + 1, 9, 7, "#fff8e6");
+  R(ctx, bx + 4, by + 9, 3, 1, "#3b2a20"); R(ctx, bx + 5, by + 10, 1, 1, "#3b2a20");
+  const g = GLYPHS[icon] || GLYPHS.think;
+  g.forEach((row, j) => [...row].forEach((v, i) => { if (v === "1") R(ctx, bx + 3 + i, by + 2 + j, 1, 1, GLYPH_COL[icon]); }));
+}
+
+/* ---------- Zones et trajets ---------- */
+const SPOTS = {
+  archives: { x: 40, y: 48, face: "up" },
+  kanban: { x: 118, y: 46, face: "up" },
+  server: { x: 196, y: 50, face: "up" },
+  veille: { x: 52, y: 86, face: "up" },
+  coffee: { x: 44, y: 140, face: "up" },
+  meeting: { x: 100, y: 132, face: "down" },
+  meeting2: { x: 116, y: 132, face: "down" },
+  manager: { x: 180, y: 152, face: "up" },
+  door: { x: 158, y: 190, face: "down" },
+};
+const TOOLS = {
+  Read: ["archives", "read", 1500, "consulte"], Glob: ["archives", "read", 1100, "fouille"], Grep: ["archives", "read", 1300, "cherche"],
+  LS: ["archives", "read", 900, "parcourt"], NotebookRead: ["archives", "read", 1300, "consulte"],
+  Edit: ["seat", "edit", 2000, "rédige"], MultiEdit: ["seat", "edit", 2200, "rédige"], Write: ["seat", "edit", 2200, "crée"], NotebookEdit: ["seat", "edit", 2000, "rédige"],
+  Bash: ["server", "bash", 1800, "lance"], BashOutput: ["server", "bash", 900, "surveille"], KillShell: ["server", "bash", 700, "arrête"],
+  WebSearch: ["veille", "web", 2200, "fait de la veille sur"], WebFetch: ["veille", "web", 1800, "lit la page"],
+  TodoWrite: ["kanban", "todo", 1400, "met à jour le Kanban :"],
+  Task: ["meeting", "agent", 1800, "organise une réunion :"], Agent: ["meeting", "agent", 1800, "organise une réunion :"],
+};
+const inBand = (x, y1, y2) => x > 60 && x < 156 && Math.min(y1, y2) < 118 && Math.max(y1, y2) > 52;
+function route(a, b) {
+  const pts = []; let c = { x: a.x, y: a.y };
+  const go = (x, y) => { if (x !== c.x || y !== c.y) { pts.push({ x, y }); c = { x, y }; } };
+  const col = x => (x < 108 ? 60 : 156);
+  const lane = b.y < 86 ? 48 : 124;
+  if (inBand(c.x, c.y, lane)) go(col(c.x), c.y);
+  go(c.x, lane);
+  if (inBand(b.x, lane, b.y)) { go(col(b.x), lane); go(col(b.x), b.y); } else go(b.x, lane);
+  go(b.x, b.y);
+  return pts;
+}
+
+/* ---------- État ---------- */
+const LOOKS = [
+  { hair: "#6b3a1f", shirt: "#5aa9c9", pants: "#3b4a6b", skin: "#f1c7a0" },
+  { hair: "#2b1d16", shirt: "#5e9c4a", pants: "#4a3b2b", skin: "#d9a37a" },
+  { hair: "#1f1a2e", shirt: "#c8475f", pants: "#3b3b4a", skin: "#a8704a" },
+  { hair: "#c98a3b", shirt: "#8f6bb3", pants: "#3b4a6b", skin: "#f1c7a0" },
+];
+const INTERN_LOOKS = [
+  { hair: "#e0b25a", shirt: "#e8b23a", pants: "#4a3b2b", skin: "#f1c7a0" },
+  { hair: "#3a2416", shirt: "#e8b23a", pants: "#3b4a6b", skin: "#8a5a3b" },
+];
+const MANAGER = { hair: "#4a2e1c", shirt: "#f4efe4", pants: "#2f3542", skin: "#e6b58f" };
+const S = { agents: new Map(), tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], ticketCost: 0 };
+let T = 0;
+
+function addAgent({ id, name }, opts = {}) {
+  if (S.agents.has(id)) return S.agents.get(id);
+  const idx = S.agents.size;
+  const seat = opts.intern ? SEATS[3] : SEATS[Math.min(idx, 2)];
+  const start = opts.intern ? SPOTS.door : seat;
+  const a = { n: idx, id, name, look: opts.look || LOOKS[idx % LOOKS.length], x: start.x, y: start.y, dir: "up", seat, path: [], queue: [], cur: null,
+    arrived: true, dwell: 0, icon: null, label: "Disponible", fatigue: 0, ticket: null, intern: !!opts.intern, parent: opts.parent || null, gone: false };
+  S.agents.set(id, a);
+  renderTeam();
+  return a;
+}
+function enqueue(a, act) { a.queue.push(act); }
+function spotFor(a, name) {
+  if (name === "seat") return a.seat;
+  const s = SPOTS[name];
+  if (name === "door" || name === "meeting" || name === "meeting2") return s;
+  return { x: s.x + ((a.n % 3) - 1) * 9, y: s.y, face: s.face };
+}
+function isIdle(a) { return !a.cur && a.queue.length === 0 && !a.path.length; }
+function atSpot(name) { for (const a of S.agents.values()) if (a.cur && a.cur.spot === name && a.arrived) return true; return false; }
+
+function updateAgent(a, dt) {
+  if (!a.cur && a.queue.length) {
+    a.cur = a.queue.shift();
+    const target = spotFor(a, a.cur.spot);
+    a.path = route(a, target); a.arrived = false;
+    const fast = a.queue.length > 5 ? 0.35 : 1;
+    a.dwell = (a.cur.dwell || 0) * fast;
+    a.icon = a.cur.icon; a.label = a.cur.label || a.label;
+  }
+  if (a.path.length) {
+    const p = a.path[0], sp = 0.045 * dt;
+    const dx = p.x - a.x, dy = p.y - a.y, d = Math.hypot(dx, dy);
+    if (Math.abs(dy) > 0.5) a.dir = dy < 0 ? "up" : "down";
+    if (d <= sp) { a.x = p.x; a.y = p.y; a.path.shift(); } else { a.x += dx / d * sp; a.y += dy / d * sp; }
+    return;
+  }
+  if (a.cur) {
+    if (!a.arrived) {
+      a.arrived = true;
+      a.dir = spotFor(a, a.cur.spot).face || "up";
+      a.cur.onArrive && a.cur.onArrive();
+    }
+    if (a.cur.hold ? a.cur.released : (a.dwell -= dt) <= 0) {
+      const done = a.cur; a.cur = null;
+      done.onDone && done.onDone();
+    }
+    return;
+  }
+  if (a.gone) return;
+  if (a.x !== a.seat.x || a.y !== a.seat.y) {
+    enqueue(a, { spot: "seat", icon: a.ticket ? "think" : null, dwell: 0, label: a.ticket ? "Réfléchit" : "Disponible" });
+  } else {
+    a.icon = a.ticket || a.waiting ? "think" : null;
+    a.label = a.ticket ? "Réfléchit sur « " + a.ticket.title + " »" : "Disponible";
+    a.dir = "up";
+  }
+}
+
+/* ---------- Rendu ---------- */
+function draw() {
+  ctx.drawImage(bg, 0, 0);
+  const hotServer = atSpot("server");
+  for (let i = 0; i < 3; i++) for (let s = 0; s < 6; s++) {
+    const on = (Math.floor(T / (hotServer ? 110 : 520)) + i * 5 + s * 3) % 4 !== 0;
+    R(ctx, 178 + i * 20 + 11, 11 + s * 5, 1, 1, on ? (s % 3 === 0 ? "#f2c14e" : "#7be07b") : "#2a3040");
+    R(ctx, 178 + i * 20 + 12, 12 + s * 5, 1, 1, on && hotServer ? "#7be07b" : "#2a3040");
+  }
+  // Kanban vivant : les post-it avancent avec les tickets
+  const waiting = S.tickets.filter(t => t.status === "attente").length, running = S.tickets.filter(t => t.status === "cours").length;
+  const doneCount = Math.min(6, S.done);
+  const note = (x, y, c) => { R(ctx, x, y, 6, 5, c); R(ctx, x + 1, y + 1, 4, 1, "rgba(0,0,0,.18)"); };
+  for (let k = 0; k < Math.min(6, waiting); k++) note(90 + (k % 2) * 8, 8 + Math.floor(k / 2) * 6, "#f7d774");
+  for (let k = 0; k < Math.min(6, running); k++) note(110 + (k % 2) * 8, 8 + Math.floor(k / 2) * 6, "#9fd0e0");
+  for (let k = 0; k < doneCount; k++) note(130 + (k % 2) * 8, 8 + Math.floor(k / 2) * 6, "#b5dd8f");
+  // écrans allumés
+  DESKS.forEach(([x, y], i) => {
+    const occ = [...S.agents.values()].find(a => a.seat === SEATS[i] && a.x === SEATS[i].x && a.y === SEATS[i].y && (a.ticket || a.intern));
+    if (occ) {
+      R(ctx, x + 11, y - 4, 10, 6, "#8fd3ea");
+      const ln = Math.floor(T / 180) % 5;
+      for (let k = 0; k <= ln && k < 5; k++) R(ctx, x + 12, y - 3 + (k % 3) * 2, 2 + ((k * 3) % 6), 1, "#3f7fa0");
+    }
+  });
+  if (atSpot("coffee")) for (let k = 0; k < 3; k++) R(ctx, 12 + ((Math.floor(T / 200) + k) % 2), 110 - k * 3 - (Math.floor(T / 150) % 3), 1, 2, "rgba(255,255,255,.7)");
+  // le manager (toi) et son bureau
+  person(ctx, 206, 130, MANAGER, T, false, "down");
+  R(ctx, 186, 128, 42, 12, "#8a5a3b"); R(ctx, 186, 128, 42, 1, "#b07a4f"); R(ctx, 186, 140, 42, 4, "#5b3a29");
+  R(ctx, 190, 130, 8, 6, "#f4efe4"); R(ctx, 191, 131, 6, 1, "#c9c0ae"); R(ctx, 191, 133, 5, 1, "#c9c0ae");
+  R(ctx, 220, 124, 2, 8, "#3b2a20"); R(ctx, 217, 122, 8, 3, "#e8b23a");
+  const list = [...S.agents.values()].filter(a => !a.hidden).sort((p, q) => p.y - q.y);
+  list.forEach(a => person(ctx, a.x, a.y, a.look, T, a.path.length > 0, a.dir));
+  list.forEach(a => bubble(a.x, a.y, a.path.length ? null : a.icon, T));
+}
+
+/* ---------- Interface ---------- */
+const fmtUsd = v => v.toLocaleString("fr-FR", { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" });
+const fmtTok = n => n >= 1000 ? (n / 1000).toFixed(1).replace(".", ",") + " k" : String(n);
+const clock = () => { const m = 540 + Math.floor(T / 1000); return String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); };
+function log(text) {
+  const li = document.createElement("li");
+  li.innerHTML = "<time>" + clock() + "</time>";
+  li.appendChild(document.createTextNode(text));
+  const ul = $("#log"); ul.prepend(li);
+  while (ul.children.length > 80) ul.lastChild.remove();
+}
+function renderTickets() {
+  const ul = $("#tickets"); ul.innerHTML = "";
+  const visible = [...S.tickets.filter(t => t.status !== "fait" && t.status !== "echec"), ...S.tickets.filter(t => t.status === "fait" || t.status === "echec").slice(-3).reverse()];
+  if (!visible.length) { ul.innerHTML = '<li class="empty">Aucune demande. Crée un ticket pour mettre l\'équipe au travail.</li>'; return; }
+  visible.forEach(t => {
+    const li = document.createElement("li");
+    const span = document.createElement("span"); span.textContent = t.title;
+    const tag = document.createElement("span"); tag.className = "tag " + t.status;
+    tag.textContent = t.status === "attente" ? "En attente" : t.status === "cours" ? (t.agent ? t.agent.name : "En cours") : t.status === "fait" ? "Livré" : "Échec";
+    li.append(span, tag); ul.appendChild(li);
+  });
+}
+function portrait(canvas, look) {
+  const c = canvas.getContext("2d"); c.imageSmoothingEnabled = false; c.clearRect(0, 0, canvas.width, canvas.height);
+  person(c, canvas.width / 2, canvas.height - 2, look, 0, false, "down");
+}
+function renderTeam() {
+  const ul = $("#team");
+  S.agents.forEach(a => {
+    if (a.gone) { a.el && a.el.remove(); a.el = null; return; }
+    if (!a.el) {
+      a.el = document.createElement("li");
+      a.el.innerHTML = '<canvas width="16" height="20"></canvas><div class="name"></div><div class="status"></div><div class="bar">Fatigue <i><b></b></i></div>';
+      portrait(a.el.querySelector("canvas"), a.look);
+      a.el.querySelector(".name").textContent = a.intern ? a.name + " (stagiaire)" : a.name;
+      ul.appendChild(a.el);
+    }
+    a.el.querySelector(".status").textContent = a.label;
+    const b = a.el.querySelector(".bar b"); const f = Math.max(0, Math.min(1, a.fatigue));
+    b.style.width = Math.round(f * 100) + "%";
+    b.style.background = f > .8 ? "var(--berry)" : f > .55 ? "var(--gold)" : "var(--leaf)";
+  });
+}
+function renderStats() {
+  $("#sClock").textContent = clock();
+  $("#sCost").textContent = fmtUsd(S.cost);
+  $("#sTokens").textContent = fmtTok(S.tokens);
+  $("#sDone").textContent = S.done;
+  $("#kAvg").textContent = S.done ? fmtUsd(S.ticketCost / S.done) : "–";
+  $("#kDeny").textContent = S.denied + " / " + S.perms;
+  $("#kDeliv").textContent = S.deliv.length;
+  $("#kCoffee").textContent = S.coffee;
+  const ul = $("#deliv"); ul.innerHTML = "";
+  S.deliv.slice(-4).reverse().forEach(d => { const li = document.createElement("li"); li.textContent = (d.kind === "commit" ? "Commit : " : d.kind === "write" ? "Nouveau : " : "Modifié : ") + d.path; ul.appendChild(li); });
+}
+
+/* ---------- Validations ---------- */
+const permQueue = []; let permShown = null;
+function showNextPerm() {
+  if (permShown || !permQueue.length) return;
+  const req = permQueue.shift(); permShown = req;
+  const a = S.agents.get(req.agent_id);
+  $("#permTitle").textContent = (a ? a.name : "Quelqu'un") + " frappe à ta porte";
+  const q = { Bash: "Je peux lancer cette commande ?", WebFetch: "Je peux consulter cette page ?", Write: "Je peux créer ce fichier ?", Edit: "Je peux modifier ce fichier ?", MultiEdit: "Je peux modifier ce fichier ?" };
+  $("#permText").textContent = q[req.tool] || "Je peux utiliser l'outil " + req.tool + " ?";
+  $("#permCmd").textContent = req.summary || req.tool;
+  if (a) portrait($("#portrait"), a.look);
+  $("#perm").hidden = false; $("#allow").focus({ preventScroll: true });
+}
+function decide(allow) {
+  const req = permShown; if (!req) return;
+  permShown = null; $("#perm").hidden = true;
+  S.perms++; if (!allow) S.denied++;
+  if (req.act) req.act.released = true;
+  const a = S.agents.get(req.agent_id);
+  log((a ? a.name : "La demande") + (allow ? " a ton feu vert." : " repart sans ton accord."));
+  transport.send({ type: "permission_decision", request_id: req.request_id, allow });
+  renderStats(); showNextPerm();
+}
+$("#allow").onclick = () => decide(true);
+$("#deny").onclick = () => decide(false);
+
+/* ---------- Événements de jeu (communs démo / backend) ---------- */
+const INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]; let internSeq = 0;
+function handle(ev) {
+  const a = ev.agent_id ? S.agents.get(ev.agent_id) : null;
+  switch (ev.type) {
+    case "hello": ev.team.forEach(m => addAgent(m)); break;
+    case "ticket_created": S.tickets.push({ id: ev.ticket.id, title: ev.ticket.title, status: "attente" }); log("Nouvelle demande : " + ev.ticket.title); renderTickets(); break;
+    case "ticket_assigned": {
+      const t = S.tickets.find(x => x.id === ev.ticket_id); if (!t || !a) break;
+      t.status = "cours"; t.agent = a; a.ticket = t; log(a.name + " prend le ticket « " + t.title + " ».");
+      renderTickets(); break;
+    }
+    case "tool_use": {
+      if (!a) break;
+      const [spot, icon, dwell, verb] = TOOLS[ev.tool] || ["seat", "think", 1000, "utilise " + ev.tool];
+      enqueue(a, { spot, icon, dwell, label: verb.charAt(0).toUpperCase() + verb.slice(1) + " " + (ev.summary || "") });
+      log(a.name + " " + verb + " " + (ev.summary || "")); break;
+    }
+    case "tool_result": if (a && ev.ok === false) log(a.name + " rencontre un souci avec " + ev.tool + "."); break;
+    case "permission_request": {
+      if (!a) break;
+      const req = { ...ev };
+      const act = { spot: "manager", icon: "ask", hold: true, label: "Attend ta validation", onArrive: () => { permQueue.push(req); showNextPerm(); } };
+      req.act = act; enqueue(a, act); break;
+    }
+    case "subagent_spawned": {
+      const name = ev.agent.name || INTERN_NAMES[internSeq % INTERN_NAMES.length];
+      const it = addAgent({ id: ev.agent.id, name }, { intern: true, parent: ev.parent_id, look: INTERN_LOOKS[internSeq++ % INTERN_LOOKS.length] });
+      it.waiting = true;
+      enqueue(it, { spot: "meeting2", icon: "agent", dwell: 1600, label: "En réunion : " + (ev.task || "") });
+      const p = S.agents.get(ev.parent_id); if (p) p.waiting = true;
+      log(name + " arrive en renfort : " + (ev.task || "")); break;
+    }
+    case "subagent_done": {
+      if (!a) break;
+      enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Rentre chez lui", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); } });
+      const p = S.agents.get(a.parent); if (p) p.waiting = false;
+      log(a.name + " rend son rapport et s'en va."); break;
+    }
+    case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); break;
+    case "context": if (a) a.fatigue = ev.ratio; break;
+    case "compaction": {
+      if (!a) break; S.coffee++;
+      enqueue(a, { spot: "coffee", icon: "coffee", dwell: 3500, label: "Pause café", onDone: () => { a.fatigue = Math.min(a.fatigue, .25); } });
+      log(a.name + " fait une pause café : contexte compacté."); break;
+    }
+    case "cost": S.cost += ev.usd || 0; S.tokens += ev.tokens || 0; break;
+    case "ticket_done": {
+      const t = S.tickets.find(x => x.id === ev.ticket_id);
+      if (t) { t.status = ev.ok === false ? "echec" : "fait"; }
+      if (a) a.ticket = null;
+      if (ev.ok !== false) { S.done++; S.ticketCost += ev.usd || 0; }
+      log((a ? a.name : "L'équipe") + (ev.ok === false ? " n'a pas pu terminer " : " livre ") + "« " + (t ? t.title : "") + " ».");
+      renderTickets(); break;
+    }
+    case "message": if (a && ev.text) log(a.name + " : " + ev.text); break;
+  }
+  renderStats();
+}
+
+/* ---------- Transport : backend local ou démo ---------- */
+const params = new URLSearchParams(location.search);
+const localHost = ["localhost", "127.0.0.1"].includes(location.hostname) && location.protocol.startsWith("http");
+const live = (localHost || params.has("live")) && !params.has("demo");
+const transport = { send() {} };
+
+const Demo = {
+  pending: new Map(), seq: 0, ctx: {},
+  sleep: ms => new Promise(r => setTimeout(r, ms)),
+  waitIdle(a) { return new Promise(r => { const iv = setInterval(() => { if (isIdle(a) || (a.x === a.seat.x && a.y === a.seat.y && !a.cur && !a.queue.length)) { clearInterval(iv); r(); } }, 120); }); },
+  pick: arr => arr[Math.floor(Math.random() * arr.length)],
+  files: ["src/api/routes.py", "src/models/ticket.py", "tests/test_import.py", "README.md", "docker/Dockerfile", "src/utils/csv_reader.py", "src/services/export.py"],
+  greps: ["TODO", "def export", "import csv", "pagination", "timeout"],
+  searches: ["pagination FastAPI bonnes pratiques", "fixture tmp_path pytest", "cache pip dans un build Docker"],
+  risky: ["rm -rf build/", "pip install --upgrade requests", "docker compose up -d", "git commit -m \"Corrige l'import CSV\""],
+  titles: ["Ajouter la pagination à l'API des tickets", "Corriger le test d'import CSV", "Rédiger le README d'installation", "Accélérer le build Docker",
+    "Écrire un script de sauvegarde nocturne", "Mettre à jour les dépendances", "Ajouter des logs sur l'export PDF", "Nettoyer les TODO du module export"],
+  emit(ev) { handle(ev); },
+  newTicket(title) { const id = "t" + (++this.seq); this.emit({ type: "ticket_created", ticket: { id, title } }); },
+  script() {
+    const f = this.pick(this.files), s = [["TodoWrite", "3 tâches"], ["Read", f], ["Grep", this.pick(this.greps)]];
+    if (Math.random() < .4) s.push(["WebSearch", this.pick(this.searches)]);
+    if (Math.random() < .35) s.push(["Task", "Analyser " + this.pick(["le module export", "les tests", "la config Docker"])]);
+    s.push(["Edit", f, { kind: "edit" }], ["Bash", "pytest -q"]);
+    if (Math.random() < .6) s.push(["Bash", this.pick(this.risky), { perm: true }]);
+    if (Math.random() < .5) s.push(["Write", "docs/" + this.pick(["notes.md", "changelog.md", "api.md"]), { kind: "write" }]);
+    return s;
+  },
+  async runTicket(a, t) {
+    t.status = "cours";
+    this.emit({ type: "ticket_assigned", ticket_id: t.id, agent_id: a.id });
+    let usd = 0, tokens = 0;
+    for (const [tool, summary, opt = {}] of this.script()) {
+      await this.sleep(500 + Math.random() * 900);
+      if (opt.perm) {
+        const rid = "r" + (++this.seq);
+        const p = new Promise(r => this.pending.set(rid, r));
+        this.emit({ type: "permission_request", request_id: rid, agent_id: a.id, tool, summary });
+        if (!(await p)) { await this.waitIdle(a); this.emit({ type: "message", agent_id: a.id, text: "Compris, je passe par une autre solution." }); continue; }
+      }
+      if (tool === "Task") {
+        this.emit({ type: "tool_use", agent_id: a.id, tool, summary });
+        const sid = a.id + "-s" + (++this.seq);
+        this.emit({ type: "subagent_spawned", parent_id: a.id, agent: { id: sid, name: INTERN_NAMES[internSeq % INTERN_NAMES.length] }, task: summary });
+        const it = S.agents.get(sid);
+        await this.waitIdle(a); await this.waitIdle(it);
+        for (const [tl, sm] of [["Read", this.pick(this.files)], ["Grep", this.pick(this.greps)]]) { this.emit({ type: "tool_use", agent_id: sid, tool: tl, summary: sm }); await this.waitIdle(it); }
+        this.emit({ type: "subagent_done", agent_id: sid });
+        continue;
+      }
+      this.emit({ type: "tool_use", agent_id: a.id, tool, summary });
+      await this.waitIdle(a);
+      if (opt.kind) this.emit({ type: "deliverable", agent_id: a.id, path: summary, kind: opt.kind });
+      if (tool === "Bash" && summary.startsWith("git commit")) this.emit({ type: "deliverable", agent_id: a.id, path: summary.replace(/^git commit -m /, ""), kind: "commit" });
+      const tk = 1500 + Math.floor(Math.random() * 5000), c = tk * 0.000012;
+      usd += c; tokens += tk;
+      this.emit({ type: "cost", agent_id: a.id, usd: c, tokens: tk });
+      this.ctx[a.id] = (this.ctx[a.id] || 0) + tk / 90000;
+      this.emit({ type: "context", agent_id: a.id, ratio: Math.min(1, this.ctx[a.id]) });
+    }
+    await this.sleep(600);
+    this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd, tokens, ok: true });
+    if (this.ctx[a.id] > .8) { this.ctx[a.id] = .2; this.emit({ type: "compaction", agent_id: a.id }); await this.waitIdle(a); }
+    a.busy = false;
+  },
+  start() {
+    ["Léa", "Hugo", "Inès"].forEach((n, i) => addAgent({ id: "e" + i, name: n }));
+    transport.send = msg => {
+      if (msg.type === "new_ticket") this.newTicket(msg.title);
+      if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
+    };
+    const shuffled = [...this.titles].sort(() => Math.random() - .5);
+    shuffled.slice(0, 3).forEach(t => this.newTicket(t));
+    let pool = shuffled.slice(3);
+    setInterval(() => {
+      S.agents.forEach(a => {
+        if (a.intern || a.busy || a.ticket || !isIdle(a)) return;
+        const t = S.tickets.find(x => x.status === "attente");
+        if (t) { a.busy = true; this.runTicket(a, t); }
+      });
+    }, 700);
+    setInterval(() => {
+      if (!$("#auto").checked) return;
+      if (S.tickets.filter(t => t.status === "attente").length >= 2) return;
+      if (!pool.length) pool = [...this.titles].sort(() => Math.random() - .5);
+      this.newTicket(pool.shift());
+    }, 22000);
+    log("Bienvenue au bureau. Tu joues le rôle du manager : l'équipe viendra te voir pour les actions sensibles.");
+  },
+};
+
+function startLive() {
+  $("#mode").textContent = "Connecté"; $("#mode").classList.add("live");
+  $("#autoWrap").hidden = true;
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  transport.send = msg => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); };
+  ws.onmessage = e => { try { handle(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+  ws.onopen = () => log("Connecté au backend Claude Code.");
+  ws.onclose = () => { $("#mode").textContent = "Déconnecté"; $("#mode").classList.remove("live"); log("Connexion au backend perdue. Relance le serveur puis recharge la page."); };
+}
+
+$("#newTicket").addEventListener("submit", e => {
+  e.preventDefault();
+  const v = $("#ticketTitle").value.trim(); if (!v) return;
+  transport.send({ type: "new_ticket", title: v });
+  $("#ticketTitle").value = "";
+});
+
+if (live) startLive(); else Demo.start();
+renderTickets(); renderStats();
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(50, now - last); last = now; T += dt;
+  S.agents.forEach(a => updateAgent(a, dt));
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+setInterval(() => { renderTeam(); $("#sClock").textContent = clock(); }, 300);
+})();
+</script>
+</body>
+</html>
