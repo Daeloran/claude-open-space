@@ -35,7 +35,7 @@ from claude_agent_sdk import (
 )
 
 from . import konsole
-from .events import deliverable_for, summarize_tool
+from .events import INTERN_NAMES, deliverable_for, summarize_tool
 from .observer import Observer, chat_history
 from .plan_usage import PlanUsage
 from .projects import recent_projects
@@ -49,7 +49,6 @@ PERMISSION_MODE = os.environ.get("OPENSPACE_PERMISSION_MODE") or None
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 # Outils sans risque : pas de passage par le bureau du manager
 AUTO_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "WebSearch", "Agent"]
-INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
 CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 # Hosts pour lesquels on accepte l'origine http://<Host>. Liste fermée contre le DNS rebinding
 # (evil.com rebindé sur 127.0.0.1 enverrait Host = Origin = evil.com). « testserver » est le

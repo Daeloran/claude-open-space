@@ -116,12 +116,15 @@ ul{list-style:none;margin:0;padding:0}
 /* Panneau de discussion : cadre du jeu, contenu en police système pour la lecture */
 .team li.talk{cursor:pointer}
 .team li.talk:hover{background:rgba(255,255,255,.28)}
-.chat{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);display:flex;flex-direction:column;z-index:9;background:var(--chat-bg);color:var(--chat-ink);
-  border-left:3px solid var(--shadow);box-shadow:-6px 0 0 rgba(0,0,0,.18);font:14.5px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;animation:slide .16s steps(4)}
+.chat{position:fixed;left:0;right:0;bottom:0;height:45vh;display:flex;flex-direction:column;z-index:9;background:var(--chat-bg);color:var(--chat-ink);
+  border-top:3px solid var(--shadow);box-shadow:0 -6px 0 rgba(0,0,0,.18);font:14.5px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;animation:slide .16s steps(4)}
 .chat[hidden]{display:none}
-@keyframes slide{from{transform:translateX(48px)}to{transform:none}}
+@keyframes slide{from{transform:translateY(48px)}to{transform:none}}
 @media (prefers-reduced-motion:reduce){.chat{animation:none}}
-@media (max-width:560px){.chat{width:100%;border-left:0;box-shadow:none}}
+@media (max-width:560px){.chat{box-shadow:none}}
+.grip{flex:none;height:12px;cursor:ns-resize;touch-action:none}
+.grip::before{content:"";display:block;width:48px;height:4px;margin:4px auto;background:var(--chat-rule)}
+.grip:focus-visible{outline:2px solid var(--link);outline-offset:-2px}
 .chat header{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:0 10px;align-items:center;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));
   background:var(--frame);color:var(--on-frame);box-shadow:inset 0 -2px 0 var(--frame-hi),0 3px 0 var(--shadow);font-family:"Pixelify Sans",ui-monospace,monospace;position:relative}
 .chat header canvas{width:32px;height:40px;image-rendering:pixelated;grid-row:span 2;background:var(--shadow)}
@@ -169,6 +172,8 @@ ul{list-style:none;margin:0;padding:0}
 .chat .wait[hidden]{display:none}
 .tool.ask .q{color:var(--chat-ink);font-size:14px;padding:2px 8px 2px 22px}
 .tool.ask .q p{margin:.3em 0;font-weight:600}.tool.ask .q ul{margin:0 0 .4em;padding-left:1.2em}
+/* Colonne de lecture ~900px centrée ; la barre de défilement reste au bord */
+.chat header,.chat .wait,.chat-log,.chat form{padding-inline:max(12px,calc((100% - 900px) / 2))}
 .toggle{display:flex;align-items:center;gap:6px;font-size:.9rem;margin-top:8px;color:var(--ink-soft)}
 </style>
 </head>
@@ -255,6 +260,7 @@ ul{list-style:none;margin:0;padding:0}
 </div>
 
 <aside class="chat" id="chat" hidden role="dialog" aria-modal="false" aria-labelledby="chatName">
+  <div class="grip" id="chatGrip" role="separator" aria-orientation="horizontal" aria-label="Hauteur du panneau" aria-valuemin="20" aria-valuemax="85" aria-valuenow="45" tabindex="0"></div>
   <header>
     <canvas id="chatPortrait" width="16" height="20"></canvas>
     <h2 id="chatName"></h2>
@@ -802,6 +808,20 @@ function sendReply() {
 $("#chatForm").addEventListener("submit", e => { e.preventDefault(); sendReply(); });
 $("#chatInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendReply(); } });
 $("#chatClose").onclick = () => closeChat();
+// Hauteur du panneau en vh (20..85), à la souris/au doigt sur le bord haut ou aux flèches
+function chatHeight(vh) {
+  vh = Math.min(85, Math.max(20, Math.round(vh)));
+  $("#chat").style.height = vh + "vh"; $("#chatGrip").setAttribute("aria-valuenow", vh);
+}
+$("#chatGrip").addEventListener("pointerdown", e => {
+  e.preventDefault(); const g = e.currentTarget; g.setPointerCapture(e.pointerId);
+  g.onpointermove = m => chatHeight((innerHeight - m.clientY) * 100 / innerHeight);
+  g.onpointerup = g.onpointercancel = () => { g.onpointermove = null; };
+});
+$("#chatGrip").addEventListener("keydown", e => {
+  const d = { ArrowUp: 5, ArrowDown: -5 }[e.key]; if (!d) return;
+  e.preventDefault(); chatHeight(+e.currentTarget.getAttribute("aria-valuenow") + d);
+});
 document.addEventListener("keydown", e => { if (e.key === "Escape" && Chat.id && $("#perm").hidden) closeChat(); });
 function agentAt(e) {
   const r = cv.getBoundingClientRect(); if (!r.width) return null;

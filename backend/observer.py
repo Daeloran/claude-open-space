@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 
-from .events import summarize_tool
+from .events import INTERN_NAMES, summarize_tool
 
 TAIL_BYTES = 256 * 1024  # fin du transcript lue pour la fatigue initiale
 BIG_WINDOW = 1_000_000
@@ -217,13 +217,13 @@ class Observer:
         live = {"o-" + s["session_id"][:8]: s for s in live_sessions(self.config_dir, self.pid_alive)}
         out: list[dict] = []
         for aid in [a for a in self.watched if a not in live and self._gone(self.watched[a])]:
-            del self.watched[aid]
+            out.extend({"type": "subagent_done", "agent_id": sid} for sid in self.watched.pop(aid)["interns"].values())
             out.append({"type": "observed_left", "agent_id": aid})
         for aid, s in live.items():
             w = self.watched.get(aid)
             if w is None:
                 w = self.watched[aid] = {"status": s["status"], "sid": s["session_id"], "pid": s["pid"],
-                                         "waiting_for": s.get("waiting_for"), "tail": None, "tools": {},
+                                         "waiting_for": s.get("waiting_for"), "tail": None, "tools": {}, "interns": {}, "intern_seq": 0,
                                          # ponytail: réglages lus à l'arrivée seulement ; un changement en cours
                                          # de session compte au prochain démarrage de la session / de l'Open Space
                                          "window": context_window_for(s["cwd"], self.config_dir, self.window)}
@@ -299,6 +299,11 @@ class Observer:
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     out.append({"type": "tool_use", "agent_id": aid, "tool": name,
                                 "summary": summarize_tool(name, inp) or name})
+                    if name in ("Task", "Agent") and not rec.get("isSidechain"):  # sous-agent : un stagiaire
+                        w["intern_seq"] += 1
+                        sid = w["interns"][str(b.get("id"))] = f"{aid}-s{w['intern_seq']}"
+                        out.append({"type": "subagent_spawned", "parent_id": aid, "task": summarize_tool(name, inp),
+                                    "agent": {"id": sid, "name": INTERN_NAMES[(w["intern_seq"] - 1) % len(INTERN_NAMES)]}})
             if not rec.get("isSidechain") and (r := self._ratio(msg, w["window"])) is not None:
                 out.append({"type": "context", "agent_id": aid, "ratio": r})
             if not rec.get("isSidechain") and msg.get("stop_reason") == "end_turn":  # fin de réponse
@@ -309,4 +314,6 @@ class Observer:
                     out.append({"type": "tool_result", "agent_id": aid,
                                 "tool": w["tools"].pop(str(b.get("tool_use_id")), "?"),
                                 "ok": not b.get("is_error")})
+                    if sid := w["interns"].pop(str(b.get("tool_use_id")), None):
+                        out.append({"type": "subagent_done", "agent_id": sid})
         return out
