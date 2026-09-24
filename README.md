@@ -42,6 +42,8 @@ Le serveur écoute uniquement en local : les employés peuvent exécuter des com
 
 Le WebSocket `/ws` refuse toute connexion dont l'en-tête `Origin` n'est pas l'interface elle-même (`http://127.0.0.1:<port>`, `http://localhost:<port>` ou `http://[::1]:<port>`, même host et port que la requête) : une autre page ouverte dans ton navigateur ne peut ni créer de tickets ni valider de commandes. Derrière un proxy ou sur un autre port, ajoute les origines voulues via `OPENSPACE_ALLOWED_ORIGINS` (séparées par des virgules, ex. `OPENSPACE_ALLOWED_ORIGINS=http://localhost:3000`).
 
+Les tests front (rendu de `frontend/index.html` en jsdom) tournent seulement si `OPENSPACE_JSDOM_PATH` pointe vers une install de jsdom (dossier contenant `node_modules/jsdom`) ; sinon ils sont ignorés (`skip`).
+
 ## Architecture
 
 ```
