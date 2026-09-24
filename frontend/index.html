@@ -7,6 +7,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Panneau de discussion : Markdown, coloration, assainissement. Absents (hors ligne) : texte brut. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js" integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js" integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js" integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 :root{
   box-sizing:border-box;
@@ -15,16 +19,22 @@
   --bg:#3d2b22; --frame:#5b3a29; --frame-hi:#8a5a3b; --shadow:#24170f;
   --panel:#f1dcae; --panel-2:#e2c286; --ink:#3b2a20; --ink-soft:#735646;
   --leaf:#4f8a3d; --gold:#e8b23a; --berry:#c8475f; --sky:#5aa9c9; --on-frame:#f7e7c4;
+  --chat-bg:#fbf3e1; --chat-ink:#2e241d; --chat-soft:#7b6454; --chat-rule:#e2c286; --bubble-user:#d6e9f1;
+  --bubble-ai:#fffaf0; --chat-field:#fffdf7; --code-bg:#2f3542; --code-ink:#ece9e1; --inline-code:#efe0bd; --link:#2f6f8f;
 }
 @media (prefers-color-scheme:dark){
   :root:not([data-theme="light"]){
     --bg:#1b1726; --frame:#3a2f4d; --frame-hi:#57476f; --shadow:#0f0b16;
     --panel:#e3cf9f; --panel-2:#c9ad76; --on-frame:#efe2ff;
+      --chat-bg:#211c2c; --chat-ink:#ebe5f4; --chat-soft:#a89cbc; --chat-rule:#3a3150; --bubble-user:#2f4459;
+      --bubble-ai:#2a2438; --chat-field:#1a1623; --code-bg:#14111b; --inline-code:#3a3150; --link:#8fcbe4;
   }
 }
 :root[data-theme="dark"]{
   --bg:#1b1726; --frame:#3a2f4d; --frame-hi:#57476f; --shadow:#0f0b16;
   --panel:#e3cf9f; --panel-2:#c9ad76; --on-frame:#efe2ff;
+  --chat-bg:#211c2c; --chat-ink:#ebe5f4; --chat-soft:#a89cbc; --chat-rule:#3a3150; --bubble-user:#2f4459;
+  --bubble-ai:#2a2438; --chat-field:#1a1623; --code-bg:#14111b; --inline-code:#3a3150; --link:#8fcbe4;
 }
 *,*::before,*::after{box-sizing:inherit}
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
@@ -103,6 +113,58 @@ ul{list-style:none;margin:0;padding:0}
 .modal p{margin:4px 0}
 .modal code{display:block;background:#2f3542;color:#b5f5a5;padding:6px 8px;font-family:ui-monospace,"Courier New",monospace;font-size:.9rem;overflow-x:auto;white-space:pre}
 .modal .actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px}
+/* Panneau de discussion : cadre du jeu, contenu en police système pour la lecture */
+.team li.talk{cursor:pointer}
+.team li.talk:hover{background:rgba(255,255,255,.28)}
+.chat{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);display:flex;flex-direction:column;z-index:9;background:var(--chat-bg);color:var(--chat-ink);
+  border-left:3px solid var(--shadow);box-shadow:-6px 0 0 rgba(0,0,0,.18);font:14.5px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;animation:slide .16s steps(4)}
+.chat[hidden]{display:none}
+@keyframes slide{from{transform:translateX(48px)}to{transform:none}}
+@media (prefers-reduced-motion:reduce){.chat{animation:none}}
+@media (max-width:560px){.chat{width:100%;border-left:0;box-shadow:none}}
+.chat header{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:0 10px;align-items:center;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));
+  background:var(--frame);color:var(--on-frame);box-shadow:inset 0 -2px 0 var(--frame-hi),0 3px 0 var(--shadow);font-family:"Pixelify Sans",ui-monospace,monospace;position:relative}
+.chat header canvas{width:32px;height:40px;image-rendering:pixelated;grid-row:span 2;background:var(--shadow)}
+.chat header h2{margin:0;font-size:1.2rem;font-weight:600;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat header p{margin:0;font-size:.85rem;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat header button{grid-row:1/3;grid-column:3}
+.chat-log{flex:1;overflow-y:auto;padding:16px 14px 10px;display:flex;flex-direction:column;gap:10px;overscroll-behavior:contain}
+.msg{max-width:92%;padding:8px 12px;overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--bubble-user);white-space:pre-wrap;border-radius:12px 12px 3px 12px}
+.msg.ai{align-self:flex-start;background:var(--bubble-ai);border-radius:12px 12px 12px 3px;box-shadow:inset 0 0 0 1px var(--chat-rule)}
+.md>:first-child{margin-top:0}.md>:last-child{margin-bottom:0}
+.md p,.md ul,.md ol,.md pre,.md blockquote,.md table{margin:.55em 0}
+.md ul{list-style:disc;padding-left:1.3em}.md ol{list-style:decimal;padding-left:1.4em}
+.md h1,.md h2,.md h3,.md h4{font-size:1.05em;margin:.8em 0 .3em}
+.md blockquote{border-left:3px solid var(--chat-rule);padding-left:10px;color:var(--chat-soft)}
+.md table{border-collapse:collapse;display:block;overflow-x:auto}.md th,.md td{border:1px solid var(--chat-rule);padding:3px 7px}
+.md a{color:var(--link)}
+.md.plain{white-space:pre-wrap}
+.md :not(pre)>code{font:.88em ui-monospace,"DejaVu Sans Mono",Menlo,Consolas,monospace;background:var(--inline-code);padding:1px 4px;border-radius:3px}
+.md pre,.tool pre{background:var(--code-bg);color:var(--code-ink);padding:9px 11px;overflow-x:auto;border-radius:4px;font:12.5px/1.45 ui-monospace,"DejaVu Sans Mono",Menlo,Consolas,monospace}
+.md pre code{font:inherit;background:none;padding:0}
+.hljs-keyword,.hljs-selector-tag,.hljs-built_in,.hljs-type{color:#f2c14e}
+.hljs-string,.hljs-regexp,.hljs-addition{color:#b5f5a5}
+.hljs-comment,.hljs-quote{color:#8a93a6;font-style:italic}
+.hljs-number,.hljs-literal,.hljs-symbol{color:#9fd0e0}
+.hljs-title,.hljs-section,.hljs-name{color:#f7a1b0}
+.hljs-attr,.hljs-variable,.hljs-params,.hljs-attribute{color:#e8c8a0}
+.hljs-meta,.hljs-deletion{color:#d4a8ff}
+.tool{font-size:13px;color:var(--chat-soft)}
+.tool summary{cursor:pointer;display:flex;gap:7px;align-items:baseline;padding:2px 4px;list-style:none}
+.tool summary::-webkit-details-marker{display:none}
+.tool summary::before{content:"▸";flex:none}.tool[open] summary::before{content:"▾"}
+.tool b{color:var(--chat-ink);font-weight:600;flex:none}
+.tool .sum{font-family:ui-monospace,"DejaVu Sans Mono",Menlo,Consolas,monospace;font-size:12.5px;min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tool .st{flex:none;width:1em;text-align:center;font-weight:700}
+.tool .st.ok{color:var(--leaf)}.tool .st.ko{color:var(--berry)}
+.tool pre{margin:4px 0 2px 18px;max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.chat .note{color:var(--chat-soft);text-align:center;margin:auto 12px}
+.chat form{border-top:2px solid var(--chat-rule);padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px}
+.chat textarea{font:inherit;resize:none;height:64px;background:var(--chat-field);color:var(--chat-ink);border:2px solid var(--shadow);padding:7px 9px}
+.chat form button{align-self:end;font-family:"Pixelify Sans",ui-monospace,monospace}
+.chat .status{grid-column:1/-1;margin:0;font-size:.82rem;color:var(--chat-soft);min-height:1.3em}
+.chat .status.err{color:var(--berry)}
 .toggle{display:flex;align-items:center;gap:6px;font-size:.9rem;margin-top:8px;color:var(--ink-soft)}
 </style>
 </head>
@@ -134,7 +196,7 @@ ul{list-style:none;margin:0;padding:0}
           <div><i class="sw" style="background:#5aa9c9"></i>Coin veille : recherche web</div>
           <div><i class="sw" style="background:#a0673f"></i>Table de réunion : sous-agents</div>
           <div><i class="sw" style="background:#c8475f"></i>Ton bureau : validations</div>
-          <div><i class="sw" style="background:#2f3542"></i>Sweat sombre : session du terminal (lecture seule)</div>
+          <div><i class="sw" style="background:#2f3542"></i>Sweat sombre : session du terminal (clique pour discuter)</div>
         </div>
       </div>
 
@@ -187,6 +249,21 @@ ul{list-style:none;margin:0;padding:0}
     </div>
   </div>
 </div>
+
+<aside class="chat" id="chat" hidden role="dialog" aria-modal="false" aria-labelledby="chatName">
+  <header>
+    <canvas id="chatPortrait" width="16" height="20"></canvas>
+    <h2 id="chatName"></h2>
+    <p id="chatProj"></p>
+    <button type="button" id="chatClose" title="Fermer (Échap)">Fermer</button>
+  </header>
+  <div class="chat-log" id="chatLog" aria-live="polite"></div>
+  <form id="chatForm">
+    <textarea id="chatInput" placeholder="Ta réponse… (Maj+Entrée : nouvelle ligne)" aria-label="Ta réponse"></textarea>
+    <button class="primary" type="submit">Envoyer</button>
+    <p class="status" id="chatStatus" role="status"></p>
+  </form>
+</aside>
 
 <script>
 (() => {
@@ -535,7 +612,12 @@ function renderTeam() {
       portrait(a.el.querySelector("canvas"), a.look);
       a.el.querySelector(".name").textContent = a.intern ? a.name + " (stagiaire)" : a.name;
       if (a.project) { const p = document.createElement("span"); p.className = "proj"; p.textContent = a.project; p.title = a.cwd; a.el.querySelector(".name").append(p); }
-      if (a.observed) { const p = document.createElement("span"); p.className = "proj term"; p.textContent = "terminal"; p.title = "Session Claude Code du terminal : les tickets sont tapés dans son onglet Konsole"; a.el.querySelector(".name").append(p); }
+      if (a.observed) {
+        const p = document.createElement("span"); p.className = "proj term"; p.textContent = "terminal"; p.title = "Session Claude Code du terminal : les tickets sont tapés dans son onglet Konsole"; a.el.querySelector(".name").append(p);
+        a.el.className = "talk"; a.el.tabIndex = 0; a.el.setAttribute("role", "button"); a.el.title = "Discuter avec " + a.name;
+        a.el.onclick = () => openChat(a);
+        a.el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChat(a); } };
+      }
       ul.appendChild(a.el);
     }
     a.el.querySelector(".status").textContent = a.label;
@@ -612,6 +694,97 @@ function dropPerm(rid) {
 $("#allow").onclick = () => decide(true);
 $("#deny").onclick = () => decide(false);
 
+/* ---------- Discussion avec un employé terminal ---------- */
+const Chat = { id: null, act: null, back: null, sent: null };
+const chatLog = $("#chatLog");
+function mdNode(text) {
+  const el = document.createElement("div"); el.className = "md";
+  if (window.marked && window.DOMPurify) { // jamais de HTML non assaini ; sans les bibliothèques : texte brut
+    el.innerHTML = DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }));
+    if (window.hljs) el.querySelectorAll("pre code").forEach(c => hljs.highlightElement(c));
+    el.querySelectorAll("a").forEach(x => { x.target = "_blank"; x.rel = "noopener noreferrer"; });
+  } else { el.classList.add("plain"); el.textContent = text; }
+  return el;
+}
+function toolRow(e) {
+  const d = document.createElement("details"); d.className = "tool"; d.dataset.id = e.id || "";
+  const s = document.createElement("summary"), st = document.createElement("span"), b = document.createElement("b"), sm = document.createElement("span");
+  st.className = "st"; st.textContent = "…"; st.title = "En cours";
+  b.textContent = e.tool || "Résultat"; sm.className = "sum"; sm.textContent = e.summary || "";
+  const pre = document.createElement("pre"); pre.textContent = "Pas encore de sortie.";
+  s.append(st, b, sm); d.append(s, pre);
+  return d;
+}
+function setResult(d, e) {
+  const st = d.querySelector(".st"), ok = e.ok !== false;
+  st.textContent = ok ? "✓" : "✗"; st.className = "st " + (ok ? "ok" : "ko"); st.title = ok ? "Réussi" : "Échec";
+  d.querySelector("pre").textContent = e.text || "(sortie vide)";
+}
+function addEntry(e) {
+  if (e.kind === "tool_result") {
+    const d = e.id && [...chatLog.querySelectorAll("details.tool")].find(x => x.dataset.id === e.id);
+    if (d) return setResult(d, e);
+    const n = toolRow({ tool: "Résultat d'outil" }); setResult(n, e); return chatLog.append(n);
+  }
+  if (e.kind === "tool_use") return chatLog.append(toolRow(e));
+  const m = document.createElement("div"); m.className = "msg " + (e.role === "user" ? "user" : "ai");
+  const at = new Date(e.ts); if (e.ts && !isNaN(at)) m.title = at.toLocaleString("fr-FR");
+  if (e.role === "user") m.textContent = e.text || ""; else m.append(mdNode(e.text || ""));
+  chatLog.append(m);
+}
+function chatAppend(entries, force) {
+  // Collé en bas seulement si l'utilisateur n'est pas remonté lire
+  const stick = force || chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 48;
+  const note = chatLog.querySelector(".note"); if (note) note.remove();
+  entries.forEach(addEntry);
+  if (stick) chatLog.scrollTop = chatLog.scrollHeight;
+}
+function chatNote(text) { const p = document.createElement("p"); p.className = "note"; p.textContent = text; chatLog.replaceChildren(p); }
+function chatStatus(text, err) { $("#chatStatus").textContent = text; $("#chatStatus").classList.toggle("err", !!err); }
+function openChat(a) {
+  if (!a || !a.observed || a.gone || a.leaving) return;
+  if (Chat.id === a.id) { $("#chatInput").focus(); return; }
+  if (Chat.id) closeChat(true);
+  Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null;
+  $("#chatName").textContent = a.name; $("#chatProj").textContent = a.project || ""; $("#chatProj").title = a.cwd || "";
+  portrait($("#chatPortrait"), a.look);
+  chatStatus(""); chatNote("Chargement de l'historique…");
+  $("#chat").hidden = false;
+  // Il vient au bureau du manager et y reste tant que le panneau est ouvert
+  a.chatting = true; Chat.act = { spot: "manager", icon: null, hold: true, label: "Discute avec toi" };
+  a.queue = [Chat.act];
+  transport.send({ type: "open_chat", agent_id: a.id });
+  $("#chatInput").focus({ preventScroll: true });
+  log(a.name + " vient discuter à ton bureau.");
+}
+function closeChat(silent) {
+  if (!Chat.id) return;
+  const a = S.agents.get(Chat.id);
+  transport.send({ type: "close_chat", agent_id: Chat.id });
+  if (a) { a.chatting = false; a.queue = a.queue.filter(x => x !== Chat.act); }
+  Chat.act.released = true; // retour à son bureau
+  Chat.id = Chat.act = null; $("#chat").hidden = true; chatLog.replaceChildren();
+  if (!silent && Chat.back && Chat.back.focus) Chat.back.focus({ preventScroll: true });
+}
+function sendReply() {
+  const v = $("#chatInput").value.trim(); if (!v || !Chat.id) return;
+  Chat.sent = v; chatStatus("Envoi dans son terminal…");
+  transport.send({ type: "new_ticket", title: v, agent_id: Chat.id });
+  $("#chatInput").value = "";
+}
+$("#chatForm").addEventListener("submit", e => { e.preventDefault(); sendReply(); });
+$("#chatInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendReply(); } });
+$("#chatClose").onclick = () => closeChat();
+document.addEventListener("keydown", e => { if (e.key === "Escape" && Chat.id && $("#perm").hidden) closeChat(); });
+function agentAt(e) {
+  const r = cv.getBoundingClientRect(); if (!r.width) return null;
+  const x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
+  return [...S.agents.values()].filter(a => a.observed && !a.hidden && !a.gone && Math.abs(a.x - x) <= 5 && y >= a.y - 16 && y <= a.y + 2)
+    .sort((p, q) => q.y - p.y)[0] || null;
+}
+cv.addEventListener("click", e => openChat(agentAt(e)));
+cv.addEventListener("mousemove", e => { cv.style.cursor = agentAt(e) ? "pointer" : ""; });
+
 /* ---------- Événements de jeu (communs démo / backend) ---------- */
 const INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]; let internSeq = 0;
 function handle(ev) {
@@ -630,13 +803,16 @@ function handle(ev) {
     }
     case "observed_left": {
       if (!a || a.leaving) break;
+      if (Chat.id === a.id) closeChat(true);
       a.leaving = true; a.queue = [];
       enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); renderDest(); } });
       log(a.name + " ferme sa session terminal."); break;
     }
     case "observed_status": if (a) a.status = ev.status; break;
-    case "ticket_rejected": log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
-    case "ticket_created": S.tickets.push({ id: ev.ticket.id, title: ev.ticket.title, status: "attente" }); log("Nouvelle demande : " + ev.ticket.title); renderTickets(); break;
+    case "ticket_rejected": if (Chat.id && ev.title === Chat.sent) { chatStatus("Pas envoyé : " + ev.reason, true); if (!$("#chatInput").value) $("#chatInput").value = ev.title; }
+      log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
+    case "ticket_created": if (Chat.id && ev.ticket.title === Chat.sent) chatStatus("Tapé dans son terminal.");
+      S.tickets.push({ id: ev.ticket.id, title: ev.ticket.title, status: "attente" }); log("Nouvelle demande : " + ev.ticket.title); renderTickets(); break;
     case "ticket_assigned": {
       const t = S.tickets.find(x => x.id === ev.ticket_id); if (!t || !a) break;
       t.status = "cours"; t.agent = a; a.ticket = t; log(a.name + " prend le ticket « " + t.title + " ».");
@@ -647,7 +823,7 @@ function handle(ev) {
       const [spot, icon, dwell, verb] = TOOLS[ev.tool] || ["seat", "think", 1000, "utilise " + ev.tool];
       // ponytail: session terminal très active → on saute les vieux déplacements (pas de validation à garder ici)
       if (a.observed && a.queue.length >= 6) a.queue.shift();
-      enqueue(a, { spot, icon, dwell, label: verb.charAt(0).toUpperCase() + verb.slice(1) + " " + (ev.summary || "") });
+      if (!a.chatting) enqueue(a, { spot, icon, dwell, label: verb.charAt(0).toUpperCase() + verb.slice(1) + " " + (ev.summary || "") });
       log(a.name + " " + verb + " " + (ev.summary || "")); break;
     }
     case "tool_result": if (a && ev.ok === false) log(a.name + " rencontre un souci avec " + ev.tool + "."); break;
@@ -685,6 +861,13 @@ function handle(ev) {
       const p = S.agents.get(a.parent); if (p) p.waiting = false;
       log(a.name + " rend son rapport et s'en va."); break;
     }
+    case "chat_history":
+      if (ev.agent_id !== Chat.id) break;
+      if (ev.error) chatNote(ev.error);
+      else if (!(ev.entries || []).length) chatNote("Rien à afficher pour l'instant.");
+      else { chatLog.replaceChildren(); chatAppend(ev.entries, true); }
+      break;
+    case "chat_entry": if (ev.agent_id === Chat.id && ev.entry) chatAppend([ev.entry]); break;
     case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); break;
     case "context": if (a) a.fatigue = ev.ratio; break;
     case "compaction": {
@@ -797,8 +980,46 @@ const Demo = {
       this.emit({ type: "tool_result", agent_id: id, tool, ok: true });
     }, 2500);
   },
+  // Faux historique de « refacto-auth » : consultable dans le panneau, et il répond (réponses simulées)
+  history: {},
+  chatDemo() {
+    const t0 = Date.now() - 40 * 60e3, h = [];
+    let k = 0, tool = 0;
+    const at = () => new Date(t0 + (k++) * 90e3).toISOString();
+    const say = (role, text) => h.push({ role, kind: "text", text, ts: at() });
+    const run = (name, summary, out, ok = true) => { const id = "toolu_demo" + (++tool); h.push({ role: "assistant", kind: "tool_use", tool: name, summary, id, ts: at() }, { role: "user", kind: "tool_result", id, text: out, ok, ts: at() }); };
+    say("user", "Le test d'import CSV échoue depuis ce matin, tu peux regarder ?");
+    say("assistant", "Je lance le test et je regarde le lecteur CSV.");
+    run("Bash", "pytest tests/test_import.py -q", "F\n______ test_import_point_virgule ______\nAssertionError: assert 3 == 4\n1 failed in 0.21s", false);
+    run("Read", "utils/csv_reader.py", "def read_rows(path):\n    with open(path, newline=\"\") as f:\n        return list(csv.reader(f))");
+    say("assistant", "Le lecteur suppose des virgules, mais le fichier de test utilise des **points-virgules**. Je détecte le séparateur :\n\n```python\ndef read_rows(path):\n    with open(path, newline=\"\") as f:\n        dialect = csv.Sniffer().sniff(f.read(2048))\n        f.seek(0)\n        return list(csv.reader(f, dialect))\n```");
+    run("Edit", "utils/csv_reader.py", "Fichier modifié.");
+    run("Bash", "pytest -q", "....\n4 passed in 0.19s");
+    say("assistant", "C'est corrigé :\n\n- séparateur détecté avec `csv.Sniffer`\n- les 4 tests passent\n\nJe fais un commit ?");
+    say("user", "Oui, vas-y.");
+    run("Bash", "git commit -m \"Détecte le séparateur CSV\"", "[main 3f2a1c9] Détecte le séparateur CSV\n 1 file changed, 3 insertions(+), 1 deletion(-)");
+    say("assistant", "Commit fait. Autre chose ?");
+    this.history["o-demo0001"] = h;
+  },
+  async reply(id, title) {
+    const h = this.history[id], tid = "t" + (++this.seq), now = () => new Date().toISOString();
+    const push = e => { h.push(e); this.emit({ type: "chat_entry", agent_id: id, entry: e }); };
+    this.emit({ type: "ticket_created", ticket: { id: tid, title } });
+    this.emit({ type: "ticket_assigned", ticket_id: tid, agent_id: id });
+    push({ role: "user", kind: "text", text: title, ts: now() });
+    await this.sleep(900);
+    const tu = "toolu_demo" + (++this.seq), f = this.pick(this.files);
+    push({ role: "assistant", kind: "tool_use", tool: "Read", summary: f, id: tu, ts: now() });
+    this.emit({ type: "tool_use", agent_id: id, tool: "Read", summary: f });
+    await this.sleep(900);
+    push({ role: "user", kind: "tool_result", id: tu, text: "# " + f + "\n(contenu fictif de la démo)", ok: true, ts: now() });
+    await this.sleep(1200);
+    push({ role: "assistant", kind: "text", text: "Bien reçu : *« " + title + " »*.\n\nEn démo je ne fais rien de réel ; avec le backend, ta réponse est tapée dans mon terminal et ma vraie réponse s'affiche ici.", ts: now() });
+    this.emit({ type: "ticket_done", ticket_id: tid, agent_id: id, usd: 0, tokens: 0, ok: true });
+  },
   start() {
     this.emit({ type: "hello", team: [], projects: this.projects });
+    this.chatDemo();
     const ids = this.projects.slice(0, 3).map(p => this.hire(p.cwd));
     const inHours = h => new Date(Date.now() + h * 3600e3).toISOString();
     this.emit({ type: "plan_usage", five_hour: { utilization: 23, resets_at: inHours(3.2) }, seven_day: { utilization: 41, resets_at: inHours(90) } });
@@ -806,11 +1027,17 @@ const Demo = {
       if (msg.type === "new_ticket") {
         const reject = reason => this.emit({ type: "ticket_rejected", title: msg.title, reason });
         const to = msg.agent_id && S.agents.get(msg.agent_id);
-        if (to && to.observed) reject("Démo : pas de vrai terminal où taper ce ticket.");
+        if (to && to.observed && this.history[msg.agent_id]) this.reply(msg.agent_id, msg.title);
+        else if (to && to.observed) reject("Démo : pas de vrai terminal où taper ce ticket.");
         else if (msg.agent_id) to ? this.newTicket(msg.title, msg.agent_id) : reject("Employé inconnu.");
         else if (msg.cwd) this.newTicket(msg.title, this.hire(msg.cwd));
         else reject("Choisis un employé ou un projet pour ce ticket.");
       }
+      if (msg.type === "open_chat") setTimeout(() => {
+        const h = this.history[msg.agent_id];
+        this.emit(h ? { type: "chat_history", agent_id: msg.agent_id, entries: h.slice(-200) }
+          : { type: "chat_history", agent_id: msg.agent_id, entries: [], error: "Démo : pas d'historique pour cette session." });
+      }, 250);
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
     };
     const shuffled = [...this.titles].sort(() => Math.random() - .5);
