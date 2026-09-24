@@ -76,6 +76,8 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 
 À la connexion, `snapshot` suit `hello` avec l'état courant (employés `agents`, tickets, totaux coût/tokens, fatigue par employé, validations en attente) : recharger l'onglet ou en ouvrir un second ne perd rien. `permission_resolved` ferme la validation sur tous les onglets.
 
+Stagiaires : cliquer sur un stagiaire ouvre le panneau en lecture seule sur son sous-agent (`projects/<dossier>/<session>/subagents/agent-*.jsonl`, repéré par le `toolUseId` de son `.meta.json`) : sa consigne, ses outils, son rapport, en direct ; ceux d'une session terminal se déplacent aussi selon leurs outils. Limite : un sous-agent lancé en arrière-plan rend son résultat tout de suite, son stagiaire repart donc tôt.
+
 `todos` : `{"agent_id", "todos": [{"content", "status"}]}`, dernière liste TodoWrite d'un employé (piloté ou terminal ; éléments invalides ignorés), rejouée dans le `snapshot` (`todos` : `{agent_id: [...]}`). Affichée dans le bandeau d'avancement du panneau (état, ticket, fatigue, tâches) et en « n/m tâches » dans « Équipe ».
 
 `plan_usage` : `{"five_hour": {"utilization": 42, "resets_at": "<ISO 8601>"} | null, "seven_day": {...} | null}`, `utilization` en % (0-100). Envoyé à la connexion, toutes les 3 min et à chaque `RateLimitEvent` du SDK. Source : token OAuth de `$CLAUDE_CONFIG_DIR/.credentials.json` (défaut `~/.claude`) et endpoint non documenté `GET https://api.anthropic.com/api/oauth/usage` ; `null` (« — » dans le bandeau) si indisponible.
