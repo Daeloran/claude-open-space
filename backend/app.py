@@ -19,6 +19,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    HookMatcher,
     PermissionResultAllow,
     PermissionResultDeny,
     ResultMessage,
@@ -38,6 +39,12 @@ FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 # Outils sans risque : pas de passage par le bureau du manager
 AUTO_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "WebSearch", "Agent"]
 INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
+
+
+async def ask_manager(input_data, tool_use_id, context):
+    """Force le passage par can_use_tool : sans ça, le CLI approuve seul les commandes
+    Bash en lecture seule (echo, ls, cat…) et celles autorisées dans les réglages utilisateur."""
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask"}}
 
 
 @dataclass
@@ -78,6 +85,7 @@ class Employee:
             allowed_tools=AUTO_TOOLS,
             permission_mode="acceptEdits",  # les éditions passent, Bash et le reste demandent
             can_use_tool=self.can_use_tool,
+            hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[ask_manager])]},
         )
 
     def actor(self, msg) -> str:
