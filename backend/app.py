@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -36,7 +37,7 @@ from claude_agent_sdk import (
 
 from . import konsole
 from .events import INTERN_NAMES, ask_questions, deliverable_for, summarize_tool
-from .observer import Observer, chat_history
+from .observer import Observer, TranscriptTail, chat_entries, chat_history
 from .plan_usage import PlanUsage
 from .projects import recent_projects
 
@@ -176,6 +177,8 @@ class Employee:
         self.subagents: dict[str, str] = {}   # tool_use_id du Task -> id du stagiaire
         self.tool_names: dict[str, str] = {}  # tool_use_id -> nom de l'outil
         self.intern_seq = 0
+        self.session_id: str | None = None  # session SDK, connue au premier message : son transcript sert au panneau
+        self.tail: TranscriptTail | None = None
         self.options = ClaudeAgentOptions(
             cwd=cwd,
             allowed_tools=AUTO_TOOLS,
@@ -285,9 +288,12 @@ class Employee:
             if plan.apply_rate_limit(msg.rate_limit_info):
                 await hub.emit(plan.event)
         elif isinstance(msg, SystemMessage):
+            if getattr(msg, "subtype", "") == "init":
+                self.set_session((getattr(msg, "data", None) or {}).get("session_id"))
             if getattr(msg, "subtype", "") == "compact_boundary":
                 await hub.emit({"type": "compaction", "agent_id": self.id})
         elif isinstance(msg, ResultMessage):
+            self.set_session(getattr(msg, "session_id", None))
             usage = msg.usage or {}
             get = lambda k: int(usage.get(k, 0) or 0)  # noqa: E731
             ctx_tokens = get("input_tokens") + get("cache_read_input_tokens") + get("cache_creation_input_tokens")
@@ -296,6 +302,26 @@ class Employee:
             await hub.emit({"type": "cost", "agent_id": self.id, "usd": cost, "tokens": tokens})
             return cost, tokens
         return 0.0, 0
+
+    def set_session(self, sid) -> None:
+        if isinstance(sid, str) and re.fullmatch(r"[\w-]+", sid) and sid != self.session_id:  # sid sert dans un glob
+            self.session_id, self.tail = sid, None
+
+    def transcript(self) -> Path | None:
+        return next((CLAUDE_CONFIG_DIR / "projects").glob(f"*/{self.session_id}.jsonl"), None) if self.session_id else None
+
+    def follow(self) -> Path | None:
+        """Transcript de la session, suivi depuis sa fin actuelle dès qu'il existe (offset fixé tout de suite)."""
+        if self.tail is None and (path := self.transcript()):
+            self.tail = TranscriptTail(path, from_end=True)
+            self.tail.read_new()
+        return self.tail.path if self.tail else None
+
+    def chat_updates(self) -> list[dict]:
+        """Nouvelles entrées du transcript pour les panneaux ouverts (le début est servi par `chat_history`)."""
+        if not self.follow():
+            return []
+        return [{"type": "chat_entry", "agent_id": self.id, "entry": e} for e in chat_entries(self.tail.read_new())]
 
     async def refresh_context(self, client) -> None:
         """Fatigue = remplissage réel du contexte de la session (maxTokens : limite effective avant compaction)."""
@@ -357,7 +383,10 @@ async def type_in_terminal(agent: dict, title: str) -> str | None:
 
 
 def chat_transcript(aid: str) -> Path | str:
-    """Transcript de la session terminal `aid`, ou la raison de l'échec."""
+    """Transcript de l'employé `aid` (piloté ou session terminal), ou la raison de l'échec."""
+    if e := employees.get(aid):
+        # Suivi fixé avant la lecture de l'historique : une ligne écrite entre les deux arrive en double, jamais perdue
+        return e.follow() or "Pas encore de conversation : donne-lui un ticket."
     w = observer.watched.get(aid) if observer else None
     if not w:
         return "Employé inconnu (seules les sessions du terminal ont un historique)."
@@ -382,6 +411,9 @@ async def observe_terminal(observer: Observer, interval: float = 2.0) -> None:
     while True:
         try:
             await observer.poll()
+            for e in list(employees.values()):  # panneaux des employés pilotés : même relève
+                for ev in await asyncio.to_thread(e.chat_updates):
+                    await hub.emit(ev)
         except Exception:
             logging.getLogger(__name__).exception("observation des sessions terminal")
         await asyncio.sleep(interval)

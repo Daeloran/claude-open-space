@@ -639,6 +639,8 @@ function renderTeam() {
       if (a.project) { const p = document.createElement("span"); p.className = "proj"; p.textContent = a.project; p.title = a.cwd; a.el.querySelector(".name").append(p); }
       if (a.observed) {
         const p = document.createElement("span"); p.className = "proj term"; p.textContent = "terminal"; p.title = "Session Claude Code du terminal : les tickets sont tapés dans son onglet Konsole"; a.el.querySelector(".name").append(p);
+      }
+      if (!a.intern) {
         a.el.className = "talk"; a.el.tabIndex = 0; a.el.setAttribute("role", "button"); a.el.title = "Discuter avec " + a.name;
         a.el.onclick = () => openChat(a);
         a.el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChat(a); } };
@@ -824,7 +826,7 @@ function chatWait(a) {
 }
 function chatStatus(text, err) { $("#chatStatus").textContent = text; $("#chatStatus").classList.toggle("err", !!err); }
 function openChat(a) {
-  if (!a || !a.observed || a.gone || a.leaving) return;
+  if (!a || a.intern || a.gone || a.leaving) return;
   if (Chat.id === a.id) { $("#chatInput").focus(); return; }
   if (Chat.id) closeChat(true);
   Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null;
@@ -850,7 +852,8 @@ function closeChat(silent) {
 }
 function sendReply() {
   const v = $("#chatInput").value.trim(); if (!v || !Chat.id) return;
-  Chat.sent = v; chatStatus("Envoi dans son terminal…");
+  const a = S.agents.get(Chat.id);
+  Chat.sent = v; chatStatus(a && a.observed ? "Envoi dans son terminal…" : "Envoi…");
   transport.send({ type: "new_ticket", title: v, agent_id: Chat.id });
   $("#chatInput").value = "";
 }
@@ -875,7 +878,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && Chat.id &&
 function agentAt(e) {
   const r = cv.getBoundingClientRect(); if (!r.width) return null;
   const x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
-  return [...S.agents.values()].filter(a => a.observed && !a.hidden && !a.gone && Math.abs(a.x - x) <= 5 && y >= a.y - 16 && y <= a.y + 2)
+  return [...S.agents.values()].filter(a => !a.intern && !a.hidden && !a.gone && Math.abs(a.x - x) <= 5 && y >= a.y - 16 && y <= a.y + 2)
     .sort((p, q) => q.y - p.y)[0] || null;
 }
 cv.addEventListener("click", e => openChat(agentAt(e)));
@@ -913,7 +916,7 @@ function handle(ev) {
     }
     case "ticket_rejected": if (Chat.id && ev.title === Chat.sent) { chatStatus("Pas envoyé : " + ev.reason, true); if (!$("#chatInput").value) $("#chatInput").value = ev.title; }
       log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
-    case "ticket_created": if (Chat.id && ev.ticket.title === Chat.sent) chatStatus("Tapé dans son terminal.");
+    case "ticket_created": if (Chat.id && ev.ticket.title === Chat.sent) chatStatus(S.agents.get(Chat.id)?.observed ? "Tapé dans son terminal." : "Ticket confié, il s'y met après ses tickets en cours.");
       S.tickets.push({ id: ev.ticket.id, title: ev.ticket.title, status: "attente" }); log("Nouvelle demande : " + ev.ticket.title); renderTickets(); break;
     case "ticket_assigned": {
       const t = S.tickets.find(x => x.id === ev.ticket_id); if (!t || !a) break;
@@ -933,7 +936,9 @@ function handle(ev) {
       if (!a) break;
       const req = { ...ev };
       const act = { spot: "manager", icon: "ask", hold: true, label: "Attend ta validation", onArrive: () => { if (permReqs.has(req.request_id)) { permQueue.push(req); showNextPerm(); } } };
-      req.act = act; permReqs.set(req.request_id, req); enqueue(a, act); break;
+      req.act = act; permReqs.set(req.request_id, req);
+      if (a.chatting) act.onArrive(); else enqueue(a, act); // déjà à ton bureau pour discuter : la carte s'ouvre
+      break;
     }
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
@@ -1030,9 +1035,13 @@ const Demo = {
     if (Math.random() < .5) s.push(["Write", "docs/" + this.pick(["notes.md", "changelog.md", "api.md"]), { kind: "write" }]);
     return s;
   },
+  // Conversation d'un employé piloté en démo : gardée pour le panneau et poussée aux panneaux ouverts
+  note(id, e) { (this.history[id] ||= []).push(e); this.emit({ type: "chat_entry", agent_id: id, entry: e }); },
   async runTicket(a, t) {
     t.status = "cours";
     this.emit({ type: "ticket_assigned", ticket_id: t.id, agent_id: a.id });
+    const now = () => new Date().toISOString();
+    this.note(a.id, { role: "user", kind: "text", text: t.title, ts: now() });
     let usd = 0, tokens = 0;
     for (const [tool, summary, opt = {}] of this.script()) {
       await this.sleep(500 + Math.random() * 900);
@@ -1053,7 +1062,10 @@ const Demo = {
         continue;
       }
       this.emit({ type: "tool_use", agent_id: a.id, tool, summary });
+      const tu = "toolu_demo" + (++this.seq);
+      this.note(a.id, { role: "assistant", kind: "tool_use", tool, summary, id: tu, ts: now() });
       await this.waitIdle(a);
+      this.note(a.id, { role: "user", kind: "tool_result", id: tu, text: "(sortie fictive de la démo)", ok: true, ts: now() });
       if (opt.kind) this.emit({ type: "deliverable", agent_id: a.id, path: summary, kind: opt.kind });
       if (tool === "Bash" && summary.startsWith("git commit")) this.emit({ type: "deliverable", agent_id: a.id, path: summary.replace(/^git commit -m /, ""), kind: "commit" });
       const tk = 1500 + Math.floor(Math.random() * 5000), c = tk * 0.000012;
@@ -1063,6 +1075,7 @@ const Demo = {
       this.emit({ type: "context", agent_id: a.id, ratio: Math.min(1, this.ctx[a.id]) });
     }
     await this.sleep(600);
+    this.note(a.id, { role: "assistant", kind: "text", text: "C'est fait pour *« " + t.title + " »*. En démo rien n'est réel ; avec le backend, ma vraie réponse s'affiche ici.", ts: now() });
     this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd, tokens, ok: true });
     if (this.ctx[a.id] > .8) { this.ctx[a.id] = .2; this.emit({ type: "compaction", agent_id: a.id }); await this.waitIdle(a); }
     a.busy = false;
@@ -1144,7 +1157,7 @@ const Demo = {
       if (msg.type === "open_chat") setTimeout(() => {
         const h = this.history[msg.agent_id];
         this.emit(h ? { type: "chat_history", agent_id: msg.agent_id, entries: h.slice(-200) }
-          : { type: "chat_history", agent_id: msg.agent_id, entries: [], error: "Démo : pas d'historique pour cette session." });
+          : { type: "chat_history", agent_id: msg.agent_id, entries: [], error: S.agents.get(msg.agent_id)?.observed ? "Démo : pas d'historique pour cette session." : "Pas encore de conversation : donne-lui un ticket." });
       }, 250);
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
     };
