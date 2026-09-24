@@ -58,6 +58,19 @@ def live_sessions(config_dir: Path, pid_alive=pid_alive) -> list[dict]:
     return out
 
 
+def context_window_for(cwd, config_dir: Path, default: int) -> int:
+    """Fenêtre du modèle réglé pour `cwd` : premier `model` des réglages projet local, projet, utilisateur."""
+    claude = Path(cwd) / ".claude"
+    for f in (claude / "settings.local.json", claude / "settings.json", Path(config_dir) / "settings.json"):
+        try:
+            model = json.loads(f.read_text(encoding="utf-8")).get("model")
+        except (OSError, ValueError, AttributeError):  # absent, illisible, invalide, pas un objet
+            continue
+        if model:
+            return BIG_WINDOW if "[1m]" in str(model) else default
+    return default
+
+
 class TranscriptTail:
     """Lecture incrémentale d'un JSONL : seulement les lignes complètes ajoutées depuis le dernier appel."""
 
@@ -136,7 +149,10 @@ class Observer:
             w = self.watched.get(aid)
             if w is None:
                 w = self.watched[aid] = {"status": s["status"], "sid": s["session_id"], "pid": s["pid"],
-                                         "tail": None, "tools": {}}
+                                         "tail": None, "tools": {},
+                                         # ponytail: réglages lus à l'arrivée seulement ; un changement en cours
+                                         # de session compte au prochain démarrage de la session / de l'Open Space
+                                         "window": context_window_for(s["cwd"], self.config_dir, self.window)}
                 out.append({"type": "observed_joined", "agent": {
                     "id": aid, "name": s["name"], "cwd": s["cwd"], "project": s["project"],
                     "status": s["status"], "observed": True}})
@@ -144,7 +160,7 @@ class Observer:
                     # Session déjà en cours : pas de rejeu de l'historique, seulement sa fatigue actuelle
                     w["tail"] = TranscriptTail(path, from_end=True)
                     w["tail"].read_new()  # fixe l'offset avant de lire la fin : rien ne se perd entre les deux
-                    if (msg := _last_assistant_usage(path)) and (r := self._ratio(msg)) is not None:
+                    if (msg := _last_assistant_usage(path)) and (r := self._ratio(msg, w["window"])) is not None:
                         out.append({"type": "context", "agent_id": aid, "ratio": r})
                 continue
             if s["status"] != w["status"]:
@@ -174,7 +190,7 @@ class Observer:
         # Trouvé une fois puis gardé par le TranscriptTail (le nom du dossier projet n'est pas interprété)
         return next((self.config_dir / "projects").glob(f"*/{sid}.jsonl"), None)
 
-    def _ratio(self, msg: dict) -> float | None:
+    def _ratio(self, msg: dict, window: int | None = None) -> float | None:
         u = msg.get("usage")
         if not isinstance(u, dict):
             return None
@@ -185,9 +201,10 @@ class Observer:
             return None
         if tokens <= 0:  # message synthétique (erreur API…) : pas une mesure
             return None
-        window = self.window
-        # ponytail: heuristique, la vraie taille de fenêtre n'est pas dans le transcript ;
-        # `[1m]` dans le modèle ou tokens au-delà de la fenêtre standard → fenêtre 1M
+        window = window or self.window
+        # ponytail: heuristique, la vraie taille de fenêtre n'est pas dans le transcript : `model` des
+        # réglages (context_window_for), puis secours `[1m]` dans le modèle du transcript ou tokens au-delà
+        # de la fenêtre → 1M. Un `/model` en cours de session reste invisible.
         if "[1m]" in str(msg.get("model") or "") or tokens > window:
             window = BIG_WINDOW
         return min(1.0, tokens / window)
@@ -206,7 +223,7 @@ class Observer:
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     out.append({"type": "tool_use", "agent_id": aid, "tool": name,
                                 "summary": summarize_tool(name, inp) or name})
-            if not rec.get("isSidechain") and (r := self._ratio(msg)) is not None:
+            if not rec.get("isSidechain") and (r := self._ratio(msg, w["window"])) is not None:
                 out.append({"type": "context", "agent_id": aid, "ratio": r})
         elif rec.get("type") == "user":
             for b in blocks:
