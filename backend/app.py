@@ -67,9 +67,6 @@ class Hub:
     def __init__(self) -> None:
         self.clients: set[WebSocket] = set()
         self.pending: dict[str, asyncio.Future[bool]] = {}
-        # ponytail: plus alimentée depuis #12 (une file par employé) ; gardée car
-        # tests/spec/test_issue1_ws_origin.py lit hub.tickets.qsize(). À retirer avec ce test.
-        self.tickets: asyncio.Queue[Ticket] = asyncio.Queue()
         self.ticket_seq = 0
         # État dérivé des événements émis, renvoyé à chaque (re)connexion. En mémoire seulement.
         self.board: dict[str, dict] = {}     # ticket_id -> {id, title, status, ...}, ordre de création
