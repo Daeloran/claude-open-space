@@ -91,3 +91,51 @@ def test_reponse_rapide_sans_busy_termine_le_ticket_terminal(monkeypatch):
     asyncio.run(run())
     assert done == ["done"] and h.board["t1"]["ok"] is True
     assert sent == ["a", "b"]
+
+
+def test_attente_ne_clot_pas_le_ticket_terminal():
+    h = Hub()
+    h.terminal["o-1"] = {"id": "t1", "busy": False}
+
+    async def run():
+        await h.emit({"type": "ticket_created", "ticket": {"id": "t1", "title": "a"}})
+        await h.emit({"type": "observed_status", "agent_id": "o-1", "status": "busy"})
+        await h.emit({"type": "observed_status", "agent_id": "o-1", "status": "waiting", "waiting_for": "input needed"})
+        assert h.board["t1"]["status"] == "queued"  # il attend ta réponse, pas fini
+        await h.emit({"type": "observed_status", "agent_id": "o-1", "status": "idle"})
+
+    asyncio.run(run())
+    assert h.board["t1"]["status"] == "done"
+
+
+def test_snapshot_garde_waiting_for_seulement_en_attente():
+    h = Hub()
+
+    async def run():
+        await h.emit({"type": "observed_joined", "agent": {"id": "o-1", "name": "x", "status": "idle"}})
+        await h.emit({"type": "observed_status", "agent_id": "o-1", "status": "waiting", "waiting_for": "dialog open"})
+        assert h.agents["o-1"]["waiting_for"] == "dialog open"
+        await h.emit({"type": "observed_status", "agent_id": "o-1", "status": "busy"})
+
+    asyncio.run(run())
+    assert "waiting_for" not in h.agents["o-1"]
+
+
+def test_rien_n_est_tape_pendant_une_attente(monkeypatch):
+    import backend.app as app_mod
+    h = Hub()
+    monkeypatch.setattr(app_mod, "hub", h)
+    sent = []
+
+    async def fake_send(pid, text):
+        sent.append(text)
+
+    monkeypatch.setattr(app_mod.konsole, "send_prompt", fake_send)
+
+    async def run():
+        await h.emit({"type": "observed_joined", "agent": {"id": "o-1", "name": "x", "status": "waiting",
+                                                          "waiting_for": "input needed"}})
+        return await app_mod.type_in_terminal({"id": "o-1", "pid": 7, "observed": True}, "1")
+
+    assert "attend ta réponse" in asyncio.run(run())
+    assert sent == [] and "o-1" not in h.terminal

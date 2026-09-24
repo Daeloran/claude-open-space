@@ -165,6 +165,10 @@ ul{list-style:none;margin:0;padding:0}
 .chat form button{align-self:end;font-family:"Pixelify Sans",ui-monospace,monospace}
 .chat .status{grid-column:1/-1;margin:0;font-size:.82rem;color:var(--chat-soft);min-height:1.3em}
 .chat .status.err{color:var(--berry)}
+.chat .wait{margin:0;padding:6px 12px;background:var(--berry);color:#fff;font-weight:600;font-size:.9rem}
+.chat .wait[hidden]{display:none}
+.tool.ask .q{color:var(--chat-ink);font-size:14px;padding:2px 8px 2px 22px}
+.tool.ask .q p{margin:.3em 0;font-weight:600}.tool.ask .q ul{margin:0 0 .4em;padding-left:1.2em}
 .toggle{display:flex;align-items:center;gap:6px;font-size:.9rem;margin-top:8px;color:var(--ink-soft)}
 </style>
 </head>
@@ -257,6 +261,7 @@ ul{list-style:none;margin:0;padding:0}
     <p id="chatProj"></p>
     <button type="button" id="chatClose" title="Fermer (Échap)">Fermer</button>
   </header>
+  <p class="wait" id="chatWait" role="status" hidden></p>
   <div class="chat-log" id="chatLog" aria-live="polite"></div>
   <form id="chatForm">
     <textarea id="chatInput" placeholder="Ta réponse… (Maj+Entrée : nouvelle ligne)" aria-label="Ta réponse"></textarea>
@@ -472,7 +477,7 @@ function seatStaff() {
   st.forEach((x, i) => { x.desk = i; x.seat = SEATS[i]; });
 }
 let internSeats = 0;
-function addAgent({ id, name, cwd, project, observed, status }, opts = {}) {
+function addAgent({ id, name, cwd, project, observed, status, waiting_for }, opts = {}) {
   if (S.agents.has(id)) return S.agents.get(id);
   const idx = S.agents.size;
   // Stagiaires : côté nord de la table de réunion (6 places, partagées au-delà) ; employés : un bureau chacun
@@ -480,7 +485,7 @@ function addAgent({ id, name, cwd, project, observed, status }, opts = {}) {
   const look = opts.look || (observed ? OBS_LOOKS[idx % OBS_LOOKS.length] : LOOKS[idx % LOOKS.length]);
   const a = { n: idx, id, name, cwd, project, desk: -1, look, x: 0, y: 0, dir: "up", seat, path: [], queue: [], cur: null,
     arrived: true, dwell: 0, icon: null, label: "Disponible", fatigue: 0, ticket: null, intern: !!opts.intern, parent: opts.parent || null, gone: false,
-    observed: !!observed, status: status || "idle" };
+    observed: !!observed, status: status || "idle", waitingFor: waiting_for };
   S.agents.set(id, a);
   if (!a.intern) seatStaff();
   const start = opts.intern || opts.hired ? SPOTS.door : a.seat;
@@ -528,12 +533,18 @@ function updateAgent(a, dt) {
   }
   if (a.gone) return;
   const idle = a.observed ? (a.status === "busy" ? "Tape dans son terminal" : "Inactif") : "Disponible";
-  if (a.x !== a.seat.x || a.y !== a.seat.y) {
-    enqueue(a, { spot: "seat", icon: a.ticket ? "think" : null, dwell: 0, label: a.ticket ? "Réfléchit" : idle });
+  // Session terminal : en attente de toi → ton bureau ; inactive → coin café ; au travail → sa place
+  const home = !a.observed || a.status === "busy" ? "seat" : a.status === "waiting" ? "manager" : "coffee", h = spotFor(a, home);
+  const waitLabel = "Attend ton retour" + (a.waitingFor ? " (" + a.waitingFor + ")" : "");
+  if (a.x !== h.x || a.y !== h.y) {
+    enqueue(a, home === "manager" ? { spot: home, icon: "ask", dwell: 0, label: waitLabel }
+      : { spot: home, icon: a.ticket ? "think" : null, dwell: 0, label: a.ticket ? "Réfléchit" : idle });
+  } else if (home === "manager") {
+    a.icon = "ask"; a.label = waitLabel; a.dir = h.face;
   } else {
     a.icon = a.ticket || a.waiting ? "think" : null;
     a.label = a.ticket ? "Réfléchit sur « " + a.ticket.title + " »" : idle;
-    a.dir = a.seat.face;
+    a.dir = h.face;
   }
 }
 
@@ -713,6 +724,17 @@ function toolRow(e) {
   b.textContent = e.tool || "Résultat"; sm.className = "sum"; sm.textContent = e.summary || "";
   const pre = document.createElement("pre"); pre.textContent = "Pas encore de sortie.";
   s.append(st, b, sm); d.append(s, pre);
+  if (e.questions) { // AskUserQuestion : question et options visibles, la réponse arrive dans <pre>
+    d.open = true; d.classList.add("ask"); pre.textContent = "En attente de ta réponse dans le terminal.";
+    const q = document.createElement("div"); q.className = "q";
+    e.questions.forEach(x => {
+      const p = document.createElement("p"), ul = document.createElement("ul");
+      p.textContent = x.question + (x.multi ? " (plusieurs choix)" : "");
+      x.options.forEach(o => { const li = document.createElement("li"); li.textContent = o; ul.append(li); });
+      q.append(p, ul);
+    });
+    d.insertBefore(q, pre);
+  }
   return d;
 }
 function setResult(d, e) {
@@ -740,6 +762,11 @@ function chatAppend(entries, force) {
   if (stick) chatLog.scrollTop = chatLog.scrollHeight;
 }
 function chatNote(text) { const p = document.createElement("p"); p.className = "note"; p.textContent = text; chatLog.replaceChildren(p); }
+function chatWait(a) {
+  const w = !!a && a.status === "waiting";
+  $("#chatWait").hidden = !w; $("#chatInput").disabled = w;
+  $("#chatWait").textContent = w ? "En attente de ta réponse dans son terminal" + (a.waitingFor ? " : " + a.waitingFor : "") : "";
+}
 function chatStatus(text, err) { $("#chatStatus").textContent = text; $("#chatStatus").classList.toggle("err", !!err); }
 function openChat(a) {
   if (!a || !a.observed || a.gone || a.leaving) return;
@@ -748,7 +775,7 @@ function openChat(a) {
   Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null;
   $("#chatName").textContent = a.name; $("#chatProj").textContent = a.project || ""; $("#chatProj").title = a.cwd || "";
   portrait($("#chatPortrait"), a.look);
-  chatStatus(""); chatNote("Chargement de l'historique…");
+  chatStatus(""); chatWait(a); chatNote("Chargement de l'historique…");
   $("#chat").hidden = false;
   // Il vient au bureau du manager et y reste tant que le panneau est ouvert
   a.chatting = true; Chat.act = { spot: "manager", icon: null, hold: true, label: "Discute avec toi" };
@@ -808,7 +835,13 @@ function handle(ev) {
       enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); renderDest(); } });
       log(a.name + " ferme sa session terminal."); break;
     }
-    case "observed_status": if (a) a.status = ev.status; break;
+    case "observed_status": {
+      if (!a) break;
+      if (ev.status === "waiting" && a.status !== "waiting") log(a.name + " attend ton retour" + (ev.waiting_for ? " (" + ev.waiting_for + ")" : "") + ".");
+      a.status = ev.status; a.waitingFor = ev.waiting_for;
+      if (Chat.id === a.id) chatWait(a);
+      break;
+    }
     case "ticket_rejected": if (Chat.id && ev.title === Chat.sent) { chatStatus("Pas envoyé : " + ev.reason, true); if (!$("#chatInput").value) $("#chatInput").value = ev.title; }
       log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
     case "ticket_created": if (Chat.id && ev.ticket.title === Chat.sent) chatStatus("Tapé dans son terminal.");
@@ -836,7 +869,7 @@ function handle(ev) {
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
-      (ev.agents || []).forEach(m => { const x = addAgent(m); if (m.observed) x.status = m.status || "idle"; });
+      (ev.agents || []).forEach(m => { const x = addAgent(m); if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
       S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });
@@ -973,7 +1006,10 @@ const Demo = {
     setInterval(() => {
       const [id] = this.pick(obs), a = S.agents.get(id);
       if (!a) return;
-      if (a.status !== "busy" || Math.random() < .2) { this.emit({ type: "observed_status", agent_id: id, status: a.status === "busy" ? "idle" : "busy" }); return; }
+      if (a.status !== "busy" || Math.random() < .2) {
+        const st = a.status !== "busy" ? "busy" : Math.random() < .4 ? "waiting" : "idle";
+        this.emit({ type: "observed_status", agent_id: id, status: st, ...(st === "waiting" && { waiting_for: "input needed" }) }); return;
+      }
       if (!isIdle(a)) return;
       const [tool, arg] = this.pick(tools);
       this.emit({ type: "tool_use", agent_id: id, tool, summary: arg() });

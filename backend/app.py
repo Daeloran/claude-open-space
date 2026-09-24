@@ -104,6 +104,9 @@ class Hub:
             self.chats.pop(ev["agent_id"], None)
         elif kind == "observed_status" and (a := self.agents.get(ev["agent_id"])):
             a["status"] = ev["status"]
+            a.pop("waiting_for", None)
+            if "waiting_for" in ev:
+                a["waiting_for"] = ev["waiting_for"]
         elif kind == "cost":
             self.totals["usd"] += ev.get("usd") or 0.0
             self.totals["tokens"] += ev.get("tokens") or 0
@@ -135,7 +138,7 @@ class Hub:
 
     async def follow_terminal(self, ev: dict) -> None:
         """Ticket d'une session terminal terminé au premier signal : fin de réponse dans le transcript
-        (`observed_turn_end` postérieur à l'envoi), retour idle après busy, ou départ de la session."""
+        (`observed_turn_end` postérieur à l'envoi), retour idle après busy (pas `waiting` : il attend ta réponse), ou départ de la session."""
         kind, aid = ev.get("type"), ev.get("agent_id")
         t = self.terminal.get(aid)
         if not t or not t["id"]:
@@ -144,7 +147,7 @@ class Hub:
             t["busy"] = True
             return
         # ponytail: une réponse en cours au moment de l'envoi (prompt mis en file) peut clore le ticket tôt
-        if (kind == "observed_left" or (kind == "observed_status" and t["busy"])
+        if (kind == "observed_left" or (kind == "observed_status" and t["busy"] and ev.get("status") == "idle")
                 or (kind == "observed_turn_end" and _after(ev.get("at"), t.get("sent")))):
             del self.terminal[aid]
             await self.emit({"type": "ticket_done", "ticket_id": t["id"], "agent_id": aid,
@@ -332,6 +335,8 @@ async def type_in_terminal(agent: dict, title: str) -> str | None:
     pid = agent.get("pid") or (observer.watched.get(aid, {}).get("pid") if observer else None)
     if not pid:
         return "Onglet Konsole introuvable pour cette session terminal."
+    if hub.agents.get(aid, {}).get("status") == "waiting":  # le texte tomberait dans la question / la permission
+        return "La session attend ta réponse dans son terminal : rien n'est tapé."
     if aid in hub.terminal:
         return "Cette session terminal a déjà un ticket en cours."
     hub.terminal[aid] = {"id": None, "busy": False, "sent": datetime.now(timezone.utc)}  # réservé pendant l'envoi (deux onglets du jeu)
