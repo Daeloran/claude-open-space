@@ -81,6 +81,7 @@ class Hub:
         self.totals = {"usd": 0.0, "tokens": 0}
         self.context: dict[str, float] = {}  # agent_id -> ratio
         self.todos: dict[str, list[dict]] = {}  # agent_id -> dernière liste TodoWrite
+        self.commands: dict[str, list[dict]] = {}  # agent_id -> commandes slash de sa session
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
         # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
         self.terminal: dict[str, dict] = {}
@@ -119,6 +120,8 @@ class Hub:
             self.totals["tokens"] += ev.get("tokens") or 0
         elif kind == "context":
             self.context[ev["agent_id"]] = ev["ratio"]
+        elif kind == "commands":
+            self.commands[ev["agent_id"]] = ev["commands"]
         elif kind == "todos":
             self.todos[ev["agent_id"]] = ev["todos"]
         elif kind == "permission_request":
@@ -129,7 +132,7 @@ class Hub:
     def snapshot(self) -> dict:
         return {"type": "snapshot", "agents": list(self.agents.values()),
                 "tickets": list(self.board.values()), "totals": dict(self.totals),
-                "context": dict(self.context), "todos": dict(self.todos), "pending_permissions": list(self.requests.values())}
+                "context": dict(self.context), "todos": dict(self.todos), "commands": dict(self.commands), "pending_permissions": list(self.requests.values())}
 
     async def emit(self, event: dict) -> None:
         if event.get("type") == "chat_entry":  # contenu de conversation : panneaux abonnés seulement, hors snapshot
@@ -188,6 +191,7 @@ class Employee:
         self.client: ClaudeSDKClient | None = None
         self.current: Ticket | None = None  # ticket en cours de réponse
         self.interrupted = False
+        self.commands: list[dict] | None = None  # commandes slash de la session, connues à la connexion
         self.session_id: str | None = None  # session SDK, connue au premier message : son transcript sert au panneau
         self.tail: TranscriptTail | None = None
         self.intern_tails: dict[str, TranscriptTail] = {}  # stagiaire -> transcript de son sous-agent
@@ -252,12 +256,24 @@ class Employee:
     async def _work(self) -> None:
         async with ClaudeSDKClient(options=self.options) as client:
             self.client = client
-            while True:
+            self.commands, clear = None, False
+            while not clear:
                 ticket = await self.tickets.get()
                 self.current, self.interrupted = ticket, False
                 await hub.emit({"type": "ticket_assigned", "ticket_id": ticket.id, "agent_id": self.id})
+                if self.commands is None:  # liste de la session, lue une fois connectée
+                    await self.load_commands(client)
                 cost, tokens, ok = 0.0, 0, True
+                cmd, _, arg = ticket.title.partition(" ") if ticket.title.startswith("/") else ("", "", "")
                 try:
+                    if cmd == "/model":  # géré ici : changer de modèle sans prompt
+                        self.options.model = arg.strip() or None
+                        await client.set_model(self.options.model)
+                        continue
+                    if cmd == "/clear":  # nouvelle session après ce ticket (sortie du client, relancé par run)
+                        clear = True
+                        await self.forget_session()
+                        continue
                     await client.query(ticket.title)
                     async for msg in client.receive_response():
                         c, t = await self.translate(msg)
@@ -276,6 +292,31 @@ class Employee:
                                     "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
                                     **({"reason": "interrompu"} if self.interrupted else {})})
                     self.tickets.task_done()
+
+    async def forget_session(self) -> None:
+        """/clear : la conversation repart de zéro (plus de reprise), le panneau et la fatigue aussi."""
+        self.options.resume = None
+        self.session_id, self.tail, self.intern_tails = None, None, {}
+        await hub.emit({"type": "chat_cleared", "agent_id": self.id})
+        await hub.emit({"type": "context", "agent_id": self.id, "ratio": 0.0})
+
+    async def load_commands(self, client) -> None:
+        """Commandes slash de la session (skills, commandes projet et intégrées), pour l'autocomplétion et le tri."""
+        try:
+            info = await client.get_server_info() or {}
+        except Exception:  # ancienne CLI, client de test : pas de liste, les commandes passent telles quelles
+            return
+        self.commands = [{"name": str(c["name"]), "description": str(c.get("description") or ""),
+                          "argumentHint": str(c.get("argumentHint") or "")}
+                         for c in info.get("commands") or [] if isinstance(c, dict) and c.get("name")]
+        await hub.emit({"type": "commands", "agent_id": self.id, "commands": self.commands})
+
+    def rejects(self, title: str) -> str | None:
+        """Raison du refus d'une commande slash absente de la session (liste connue seulement)."""
+        name = title[1:].split(" ", 1)[0] if title.startswith("/") else None
+        if name and self.commands is not None and name not in {"model", "clear"} | {c["name"] for c in self.commands}:
+            return f"Commande /{name} inconnue ou indisponible hors du terminal."
+        return None
 
     async def set_mode(self, mode: str) -> None:
         """Mode de permission de la session en cours, gardé dans les options pour une reconnexion."""
@@ -540,6 +581,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 target = await route_ticket(data)
                 if isinstance(target, dict):  # session terminal : le prompt est tapé dans son onglet
                     target = await type_in_terminal(target, title) or target
+                elif isinstance(target, Employee):
+                    target = target.rejects(title) or target
                 if isinstance(target, str):  # refus : seul l'émetteur est prévenu
                     await ws.send_json({"type": "ticket_rejected", "title": title, "reason": target})
                     continue
