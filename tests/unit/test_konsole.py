@@ -113,3 +113,19 @@ def test_locate_refuse_les_valeurs_hors_format(tmp_path, monkeypatch, service, p
         f"KONSOLE_DBUS_SERVICE={service}\0KONSOLE_DBUS_SESSION={path}\0".encode())
     monkeypatch.setattr(k, "PROC_ROOT", tmp_path)
     assert k.locate(7) is None
+
+
+def test_api_sensible_desactivee_donne_une_raison_explicite(monkeypatch):
+    monkeypatch.setattr(k, "locate", lambda pid: (":1.5", "/Sessions/1"))
+    sent = []
+
+    async def fake(service, path, method, *args):
+        if method.endswith("foregroundProcessId"):
+            return "(42,)"
+        sent.append(args)
+        raise RuntimeError("GDBus.Error:org.freedesktop.DBus.Error.Failed: Security sensitive DBus API is disabled in the settings.")
+
+    monkeypatch.setattr(k, "dbus_call", fake)
+    reason = asyncio.run(k.send_prompt(42, "salut"))
+    assert "security sensitive" in reason.lower() and "Configurer Konsole" in reason
+    assert len(sent) == 1  # rien d'autre tenté après le refus
