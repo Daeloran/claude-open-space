@@ -132,12 +132,12 @@ ul{list-style:none;margin:0;padding:0}
 .grip{flex:none;height:12px;cursor:ns-resize;touch-action:none}
 .grip::before{content:"";display:block;width:48px;height:4px;margin:4px auto;background:var(--chat-rule)}
 .grip:focus-visible{outline:2px solid var(--link);outline-offset:-2px}
-.chat header{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:0 10px;align-items:center;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));
+.chat header{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto;gap:0 10px;align-items:center;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));
   background:var(--frame);color:var(--on-frame);box-shadow:inset 0 -2px 0 var(--frame-hi),0 3px 0 var(--shadow);font-family:"Pixelify Sans",ui-monospace,monospace;position:relative}
 .chat header canvas{width:32px;height:40px;image-rendering:pixelated;grid-row:span 2;background:var(--shadow)}
 .chat header h2{margin:0;font-size:1.2rem;font-weight:600;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat header p{margin:0;font-size:.85rem;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat header button{grid-row:1/3;grid-column:3}
+.chat header button{grid-row:1/3;grid-column:4}.chat header #chatStop{grid-column:3}.chat header #chatStop[hidden]{display:none}
 .chat-log{flex:1;overflow-y:auto;padding:16px 14px 10px;display:flex;flex-direction:column;gap:10px;overscroll-behavior:contain}
 .msg{max-width:92%;padding:8px 12px;overflow-wrap:anywhere}
 .msg.user{align-self:flex-end;background:var(--bubble-user);white-space:pre-wrap;border-radius:12px 12px 3px 12px}
@@ -273,6 +273,7 @@ ul{list-style:none;margin:0;padding:0}
     <canvas id="chatPortrait" width="16" height="20"></canvas>
     <h2 id="chatName"></h2>
     <p id="chatProj"></p>
+    <button type="button" class="danger" id="chatStop" title="Interrompre sa réponse (Échap dans le champ vide)" hidden>Interrompre</button>
     <button type="button" id="chatClose" title="Fermer (Échap)">Fermer</button>
   </header>
   <p class="wait" id="chatWait" role="status" hidden></p>
@@ -874,7 +875,15 @@ $("#chatGrip").addEventListener("keydown", e => {
   const d = { ArrowUp: 5, ArrowDown: -5 }[e.key]; if (!d) return;
   e.preventDefault(); chatHeight(+e.currentTarget.getAttribute("aria-valuenow") + d);
 });
-document.addEventListener("keydown", e => { if (e.key === "Escape" && Chat.id && $("#perm").hidden) closeChat(); });
+// Échap : dans le champ vide d'un piloté au travail, interrompt (comme le terminal) ; sinon ferme le panneau
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || !Chat.id || !$("#perm").hidden) return;
+  if (e.target === $("#chatInput") && !$("#chatInput").value && !$("#chatStop").hidden) interrupt(); else closeChat();
+});
+function interrupt() { if (Chat.id) { transport.send({ type: "interrupt", agent_id: Chat.id }); chatStatus("Interruption demandée…"); } }
+$("#chatStop").onclick = interrupt;
+// Bouton visible pendant qu'un piloté répond à un ticket
+setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); }, 400);
 function agentAt(e) {
   const r = cv.getBoundingClientRect(); if (!r.width) return null;
   const x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
@@ -914,6 +923,7 @@ function handle(ev) {
       if (Chat.id === a.id) chatWait(a);
       break;
     }
+    case "interrupt_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "ticket_rejected": if (Chat.id && ev.title === Chat.sent) { chatStatus("Pas envoyé : " + ev.reason, true); if (!$("#chatInput").value) $("#chatInput").value = ev.title; }
       log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
     case "ticket_created": if (Chat.id && ev.ticket.title === Chat.sent) chatStatus(S.agents.get(Chat.id)?.observed ? "Tapé dans son terminal." : "Ticket confié, il s'y met après ses tickets en cours.");
@@ -988,6 +998,7 @@ function handle(ev) {
       const t = S.tickets.find(x => x.id === ev.ticket_id);
       if (t) { t.status = ev.ok === false ? "echec" : "fait"; }
       if (a) a.ticket = null;
+      if (a && ev.reason === "interrompu") { log(a.name + " s'arrête : tu l'as interrompu."); if (Chat.id === a.id) chatStatus("Interrompu. Ton prochain message reprend la conversation."); }
       if (ev.ok !== false) { S.done++; S.ticketCost += ev.usd || 0; }
       log((a ? a.name : "L'équipe") + (ev.ok === false ? " n'a pas pu terminer " : " livre ") + "« " + (t ? t.title : "") + " ».");
       renderTickets(); break;
@@ -1036,6 +1047,7 @@ const Demo = {
     return s;
   },
   // Conversation d'un employé piloté en démo : gardée pour le panneau et poussée aux panneaux ouverts
+  stop: new Set(), // employés pilotés interrompus (démo)
   note(id, e) { (this.history[id] ||= []).push(e); this.emit({ type: "chat_entry", agent_id: id, entry: e }); },
   async runTicket(a, t) {
     t.status = "cours";
@@ -1043,8 +1055,10 @@ const Demo = {
     const now = () => new Date().toISOString();
     this.note(a.id, { role: "user", kind: "text", text: t.title, ts: now() });
     let usd = 0, tokens = 0;
+    this.stop.delete(a.id);
     for (const [tool, summary, opt = {}] of this.script()) {
       await this.sleep(500 + Math.random() * 900);
+      if (this.stop.has(a.id)) break;
       if (opt.perm) {
         const rid = "r" + (++this.seq);
         const p = new Promise(r => this.pending.set(rid, r));
@@ -1075,6 +1089,7 @@ const Demo = {
       this.emit({ type: "context", agent_id: a.id, ratio: Math.min(1, this.ctx[a.id]) });
     }
     await this.sleep(600);
+    if (this.stop.delete(a.id)) { this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd, tokens, ok: false, reason: "interrompu" }); a.busy = false; return; }
     this.note(a.id, { role: "assistant", kind: "text", text: "C'est fait pour *« " + t.title + " »*. En démo rien n'est réel ; avec le backend, ma vraie réponse s'affiche ici.", ts: now() });
     this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd, tokens, ok: true });
     if (this.ctx[a.id] > .8) { this.ctx[a.id] = .2; this.emit({ type: "compaction", agent_id: a.id }); await this.waitIdle(a); }
@@ -1159,6 +1174,7 @@ const Demo = {
         this.emit(h ? { type: "chat_history", agent_id: msg.agent_id, entries: h.slice(-200) }
           : { type: "chat_history", agent_id: msg.agent_id, entries: [], error: S.agents.get(msg.agent_id)?.observed ? "Démo : pas d'historique pour cette session." : "Pas encore de conversation : donne-lui un ticket." });
       }, 250);
+      if (msg.type === "interrupt") { const to = S.agents.get(msg.agent_id); if (to && !to.observed && to.ticket) this.stop.add(msg.agent_id); else if (to && to.observed) this.emit({ type: "interrupt_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés peuvent être interrompus depuis le jeu." }); }
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
     };
     const shuffled = [...this.titles].sort(() => Math.random() - .5);

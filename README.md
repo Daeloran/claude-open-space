@@ -82,6 +82,7 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 
 - `{"type": "new_ticket", "title": "...", "agent_id": "e0"}` : ticket pour un employé existant
 - `{"type": "new_ticket", "title": "...", "cwd": "/chemin/du/projet"}` : recrute un employé dans ce dossier et lui confie le ticket
+- `{"type": "interrupt", "agent_id": "e0"}` : interrompt la réponse en cours d'un employé piloté (équivalent d'Échap ; ticket `ticket_done` `ok: false`, `reason: "interrompu"`, demande de permission en attente abandonnée, session gardée). Employé terminal : `interrupt_rejected` `{"agent_id", "reason"}`.
 - `{"type": "permission_decision", "request_id": "...", "allow": true}` ; pour une question (`AskUserQuestion` d'un employé piloté, dont le `permission_request` porte `questions` : `[{"question", "header", "multi", "options": [{"label", "description"}]}]`), `answers` : `{"<texte de la question>": "<libellé(s) joints par « , » ou texte libre>"}`. Réponses à des questions inconnues ou non textuelles ignorées, 4 000 caractères max. `allow: false` = « Ignorer » : Claude est prévenu que tu n'as pas répondu.
 - `{"type": "open_chat", "agent_id": "o-..."}` : historique (`chat_history`) puis entrées en direct (`chat_entry`) de cet employé terminal
 - `{"type": "close_chat", "agent_id": "o-..."}` : arrête l'envoi des entrées en direct (aussi à la déconnexion)
