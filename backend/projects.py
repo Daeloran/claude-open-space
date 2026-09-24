@@ -41,9 +41,12 @@ def recent_projects(config_dir: Path, extra: str | None = None, limit: int = 20)
     seen: set[str] = set()
     out: list[dict] = []
     for cwd in candidates:  # générateur : on s'arrête de lire dès `limit` projets trouvés
-        if not cwd or cwd in seen:
+        if not cwd:
             continue
-        seen.add(cwd)
+        real = os.path.realpath(cwd)  # /home -> /var/home : même dossier, un seul projet
+        if real in seen:
+            continue
+        seen.add(real)
         if os.path.isdir(cwd):
             out.append({"cwd": cwd, "name": Path(cwd).name})
             if len(out) >= limit:

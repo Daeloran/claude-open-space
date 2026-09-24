@@ -35,3 +35,14 @@ def test_extra_relatif_rendu_absolu(tmp_path, monkeypatch):
     (tmp_path / "rel").mkdir()
     monkeypatch.chdir(tmp_path)
     assert projects.recent_projects(tmp_path / "vide", extra="rel") == [{"cwd": str(tmp_path / "rel"), "name": "rel"}]
+
+
+def test_symlinked_paths_are_one_project(tmp_path):
+    real = tmp_path / "real" / "eter"
+    real.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    proj = tmp_path / "cfg" / "projects" / "p"
+    proj.mkdir(parents=True)
+    for i, cwd in enumerate([real, tmp_path / "link" / "eter"]):
+        (proj / f"{i}.jsonl").write_text(json.dumps({"cwd": str(cwd)}) + "\n")
+    assert [p["name"] for p in projects.recent_projects(tmp_path / "cfg")] == ["eter"]
