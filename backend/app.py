@@ -273,8 +273,9 @@ async def route_ticket(data: dict) -> Employee | str:
     if data.get("agent_id"):
         return employees.get(str(data["agent_id"])) or "Employé inconnu."
     if data.get("cwd"):
-        path = Path(str(data["cwd"])).expanduser().resolve()
-        return await hire(str(path)) if path.is_dir() else f"Dossier introuvable : {data['cwd']}"
+        # abspath, pas resolve() : le chemin reste celui de la liste de projets (liens symboliques gardés)
+        path = os.path.abspath(os.path.expanduser(str(data["cwd"])))
+        return await hire(path) if os.path.isdir(path) else f"Dossier introuvable : {data['cwd']}"
     return "Choisis un employé ou un projet pour ce ticket."
 
 
