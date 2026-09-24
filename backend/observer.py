@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 
-from .events import INTERN_NAMES, ask_questions, summarize_tool
+from .events import INTERN_NAMES, ask_questions, summarize_tool, todo_items
 
 TAIL_BYTES = 256 * 1024  # fin du transcript lue pour la fatigue initiale
 BIG_WINDOW = 1_000_000
@@ -291,6 +291,8 @@ class Observer:
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     out.append({"type": "tool_use", "agent_id": aid, "tool": name,
                                 "summary": summarize_tool(name, inp) or name})
+                    if name == "TodoWrite":
+                        out.append({"type": "todos", "agent_id": aid, "todos": todo_items(inp)})
                     if name in ("Task", "Agent") and not rec.get("isSidechain"):  # sous-agent : un stagiaire
                         w["intern_seq"] += 1
                         sid = w["interns"][str(b.get("id"))] = f"{aid}-s{w['intern_seq']}"

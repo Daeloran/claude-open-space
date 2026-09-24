@@ -36,7 +36,7 @@ from claude_agent_sdk import (
 )
 
 from . import konsole
-from .events import INTERN_NAMES, ask_questions, deliverable_for, summarize_tool
+from .events import INTERN_NAMES, ask_questions, deliverable_for, summarize_tool, todo_items
 from .observer import Observer, TranscriptTail, chat_entries, chat_history
 from .plan_usage import PlanUsage
 from .projects import recent_projects
@@ -78,6 +78,7 @@ class Hub:
         self.agents: dict[str, dict] = {}    # agent_id -> {id, name, cwd, project}, ordre de recrutement
         self.totals = {"usd": 0.0, "tokens": 0}
         self.context: dict[str, float] = {}  # agent_id -> ratio
+        self.todos: dict[str, list[dict]] = {}  # agent_id -> dernière liste TodoWrite
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
         # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
         self.terminal: dict[str, dict] = {}
@@ -102,6 +103,7 @@ class Hub:
         elif kind == "observed_left":
             self.agents.pop(ev["agent_id"], None)
             self.context.pop(ev["agent_id"], None)
+            self.todos.pop(ev["agent_id"], None)
             self.chats.pop(ev["agent_id"], None)
         elif kind == "observed_status" and (a := self.agents.get(ev["agent_id"])):
             a["status"] = ev["status"]
@@ -113,6 +115,8 @@ class Hub:
             self.totals["tokens"] += ev.get("tokens") or 0
         elif kind == "context":
             self.context[ev["agent_id"]] = ev["ratio"]
+        elif kind == "todos":
+            self.todos[ev["agent_id"]] = ev["todos"]
         elif kind == "permission_request":
             self.requests[ev["request_id"]] = ev
         elif kind == "permission_resolved":
@@ -121,7 +125,7 @@ class Hub:
     def snapshot(self) -> dict:
         return {"type": "snapshot", "agents": list(self.agents.values()),
                 "tickets": list(self.board.values()), "totals": dict(self.totals),
-                "context": dict(self.context), "pending_permissions": list(self.requests.values())}
+                "context": dict(self.context), "todos": dict(self.todos), "pending_permissions": list(self.requests.values())}
 
     async def emit(self, event: dict) -> None:
         if event.get("type") == "chat_entry":  # contenu de conversation : panneaux abonnés seulement, hors snapshot
@@ -291,6 +295,8 @@ class Employee:
                         name = INTERN_NAMES[(self.intern_seq - 1) % len(INTERN_NAMES)]
                         await hub.emit({"type": "subagent_spawned", "parent_id": self.id,
                                         "agent": {"id": sid, "name": name}, "task": summary})
+                    if block.name == "TodoWrite":
+                        await hub.emit({"type": "todos", "agent_id": who, "todos": todo_items(block.input)})
                     if d := deliverable_for(block.name, block.input):
                         await hub.emit({"type": "deliverable", "agent_id": who, **d})
         elif isinstance(msg, UserMessage):
