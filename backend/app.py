@@ -130,6 +130,8 @@ class Employee:
                         cost, tokens = cost + c, tokens + t
                         if isinstance(msg, ResultMessage):
                             ok = not getattr(msg, "is_error", False)
+                    # Mesure après la réponse (couvre aussi une compaction survenue pendant le ticket)
+                    await self.refresh_context(client)
                 except Exception as exc:
                     ok = False
                     await hub.emit({"type": "message", "agent_id": self.id, "text": f"Erreur : {exc}"})
@@ -177,10 +179,17 @@ class Employee:
             tokens = ctx_tokens + get("output_tokens")
             cost = float(msg.total_cost_usd or 0)
             await hub.emit({"type": "cost", "agent_id": self.id, "usd": cost, "tokens": tokens})
-            # Approximation : l'usage cumule tous les tours du ticket
-            await hub.emit({"type": "context", "agent_id": self.id, "ratio": min(1.0, ctx_tokens / CONTEXT_WINDOW)})
             return cost, tokens
         return 0.0, 0
+
+    async def refresh_context(self, client) -> None:
+        """Fatigue = remplissage réel du contexte de la session (maxTokens : limite effective avant compaction)."""
+        try:
+            usage = await client.get_context_usage()
+            ratio = usage["totalTokens"] / (usage.get("maxTokens") or CONTEXT_WINDOW)
+        except Exception:
+            return  # mesure impossible : on garde la dernière valeur
+        await hub.emit({"type": "context", "agent_id": self.id, "ratio": min(1.0, max(0.0, ratio))})
 
 
 employees = [Employee(i, n) for i, n in enumerate(TEAM)]
