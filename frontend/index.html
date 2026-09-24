@@ -54,9 +54,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pixelify Sans",
 .panel{background:var(--panel);border:3px solid var(--shadow);box-shadow:inset 0 0 0 2px var(--panel-2),0 4px 0 var(--shadow);padding:10px 12px 12px;margin-bottom:14px}
 .panel h2{margin:0 0 8px;font-size:1.15rem;font-weight:600}
 .panel p.hint{margin:0 0 8px;color:var(--ink-soft);font-size:.9rem}
-form.new{display:flex;gap:6px}
-input,button{font:inherit}
-input[type=text]{flex:1;min-width:0;background:#fff8e6;color:var(--ink);border:2px solid var(--shadow);padding:6px 8px}
+form.new{display:flex;flex-wrap:wrap;gap:6px}
+input,button,select{font:inherit}
+input[type=text],select{flex:1;min-width:0;background:#fff8e6;color:var(--ink);border:2px solid var(--shadow);padding:6px 8px}
+form.new select,form.new .row{flex:1 1 100%}
+form.new [hidden]{display:none}
+button:disabled{opacity:.5;cursor:not-allowed}
 button{cursor:pointer;border:2px solid var(--shadow);padding:6px 12px;background:var(--panel-2);color:var(--ink);box-shadow:0 3px 0 var(--shadow)}
 button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--shadow)}
 button.primary{background:var(--leaf);color:#fff}
@@ -74,6 +77,7 @@ ul{list-style:none;margin:0;padding:0}
 .team li:last-child{border-bottom:0}
 .team canvas{width:34px;height:42px;image-rendering:pixelated;grid-row:span 3;background:var(--panel-2);box-shadow:0 0 0 2px var(--shadow)}
 .team .name{font-weight:600}
+.proj{font-size:.75rem;font-weight:400;padding:0 5px;margin-left:6px;background:var(--sky);color:#fff}
 .team .status{font-size:.88rem;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--ink-soft)}
 .bar i{display:block;flex:1;height:8px;background:#fff8e6;box-shadow:0 0 0 2px var(--shadow);position:relative}
@@ -136,8 +140,11 @@ ul{list-style:none;margin:0;padding:0}
       <div class="panel">
         <h2>Tickets</h2>
         <form class="new" id="newTicket">
+          <select id="dest" aria-label="Destination du ticket"></select>
+          <select id="project" aria-label="Projet du nouvel employé" hidden></select>
+          <input type="text" id="cwd" class="row" placeholder="/chemin/du/projet" aria-label="Dossier du projet" autocomplete="off" hidden>
           <input type="text" id="ticketTitle" placeholder="Décris la demande…" aria-label="Nouvelle demande" autocomplete="off">
-          <button class="primary" type="submit">Créer</button>
+          <button class="primary" type="submit" id="send">Créer</button>
         </form>
         <ul class="tickets" id="tickets" style="margin-top:8px"></ul>
         <label class="toggle" id="autoWrap"><input type="checkbox" id="auto" checked> Des clients envoient des demandes</label>
@@ -191,23 +198,32 @@ const R = (c, x, y, w, h, col) => { c.fillStyle = col; c.fillRect(Math.round(x),
 /* ---------- Décor statique ---------- */
 let seed = 11;
 const srand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-const DESKS = [[72, 58], [112, 58], [72, 90], [112, 90]];
-const SEATS = DESKS.map(([x, y]) => ({ x: x + 16, y: y + 26, face: "up" }));
+let DESKS = [], SEATS = []; // [x, y, largeur] ; grille recalculée quand l'équipe grandit
+function layoutDesks(n) {
+  // Zone des bureaux x 62..154, y 56..120 (couloirs x 60/156, allées y 48/124 autour, cf. route()).
+  // ponytail: sans chevauchement jusqu'à 10 employés (5 x 2) ; au-delà les rangées se serrent
+  const cols = Math.min(5, Math.max(2, Math.ceil(n / 2))), rows = Math.max(2, Math.ceil(n / cols));
+  const pw = Math.floor(92 / cols), ph = Math.min(32, Math.floor(64 / rows)), dw = Math.min(32, pw - 4);
+  DESKS = []; for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) DESKS.push([62 + c * pw + ((pw - dw) >> 1), 56 + r * ph, dw]);
+  SEATS = DESKS.map(([x, y, w]) => ({ x: x + (w >> 1), y: y + 26, face: "up" }));
+}
 
 function plant(b, x, y) {
   R(b, x - 3, y - 5, 7, 6, "#b56a3c"); R(b, x - 3, y - 5, 7, 1, "#cf8452");
   R(b, x - 5, y - 11, 10, 6, "#4f8a3d"); R(b, x - 3, y - 14, 6, 4, "#6aa84f"); R(b, x - 1, y - 16, 2, 3, "#86c266");
 }
-function desk(b, x, y) {
-  R(b, x, y, 32, 12, "#a0673f"); R(b, x, y, 32, 1, "#c08552"); R(b, x, y + 12, 32, 4, "#6e4630");
-  R(b, x + 2, y + 16, 2, 3, "#4e3122"); R(b, x + 28, y + 16, 2, 3, "#4e3122");
-  R(b, x + 10, y - 5, 12, 8, "#232833"); R(b, x + 11, y - 4, 10, 6, "#353d4f"); R(b, x + 15, y + 3, 2, 2, "#232833");
-  R(b, x + 10, y + 6, 12, 2, "#e4e0d6"); R(b, x + 25, y + 4, 3, 3, "#f4efe4"); R(b, x + 3, y + 3, 5, 6, "#f4efe4"); R(b, x + 4, y + 4, 3, 1, "#c9c0ae");
-  R(b, x + 12, y + 20, 8, 7, "#3d4557"); R(b, x + 12, y + 20, 8, 2, "#4d5872");
+function desk(b, x, y, w) {
+  const m = x + (w >> 1) - 6; // écran centré
+  R(b, x, y, w, 12, "#a0673f"); R(b, x, y, w, 1, "#c08552"); R(b, x, y + 12, w, 4, "#6e4630");
+  R(b, x + 2, y + 16, 2, 3, "#4e3122"); R(b, x + w - 4, y + 16, 2, 3, "#4e3122");
+  R(b, m, y - 5, 12, 8, "#232833"); R(b, m + 1, y - 4, 10, 6, "#353d4f"); R(b, m + 5, y + 3, 2, 2, "#232833");
+  R(b, m, y + 6, 12, 2, "#e4e0d6");
+  if (w >= 28) { R(b, x + w - 7, y + 4, 3, 3, "#f4efe4"); R(b, x + 3, y + 3, 5, 6, "#f4efe4"); R(b, x + 4, y + 4, 3, 1, "#c9c0ae"); }
+  R(b, m + 2, y + 20, 8, 7, "#3d4557"); R(b, m + 2, y + 20, 8, 2, "#4d5872");
 }
 const bg = document.createElement("canvas"); bg.width = W; bg.height = H;
-(function paint() {
-  const b = bg.getContext("2d");
+function paint() {
+  const b = bg.getContext("2d"); seed = 11;
   R(b, 0, 0, W, H, "#c8925e");
   for (let y = 32; y < H; y += 8) {
     R(b, 0, y, W, 1, "#ad7744"); R(b, 0, y + 1, W, 1, "#d39c66");
@@ -262,7 +278,7 @@ const bg = document.createElement("canvas"); bg.width = W; bg.height = H;
   R(b, 107, 6, 1, 20, "#d8cfbf"); R(b, 127, 6, 1, 20, "#d8cfbf");
   // horloge murale
   R(b, 156, 8, 10, 10, "#5b3a29"); R(b, 157, 9, 8, 8, "#f4efe4"); R(b, 160, 10, 1, 4, "#3b2a20"); R(b, 160, 13, 3, 1, "#3b2a20");
-  DESKS.forEach(([x, y]) => desk(b, x, y));
+  DESKS.forEach(([x, y, w]) => desk(b, x, y, w));
   // table de réunion
   R(b, 70, 138, 68, 14, "#6e4630"); R(b, 70, 136, 68, 12, "#a0673f"); R(b, 72, 137, 64, 1, "#c08552");
   R(b, 84, 140, 6, 4, "#f4efe4"); R(b, 112, 141, 6, 4, "#f4efe4");
@@ -273,7 +289,8 @@ const bg = document.createElement("canvas"); bg.width = W; bg.height = H;
   R(b, 23, 122, 4, 4, "#f4efe4"); R(b, 29, 122, 4, 4, "#c8475f"); R(b, 34, 121, 4, 5, "#e8b23a");
   R(b, 6, 152, 36, 18, "#3f6e31"); R(b, 8, 157, 32, 11, "#5e9c4a"); R(b, 6, 152, 36, 5, "#3f6e31");
   plant(b, 80, 42); plant(b, 160, 44); plant(b, 56, 170); plant(b, 232, 108); plant(b, 46, 118);
-})();
+}
+layoutDesks(4); paint();
 
 /* ---------- Personnages ---------- */
 function person(c, x, y, p, t, moving, dir) {
@@ -359,18 +376,26 @@ const INTERN_LOOKS = [
   { hair: "#3a2416", shirt: "#e8b23a", pants: "#3b4a6b", skin: "#8a5a3b" },
 ];
 const MANAGER = { hair: "#4a2e1c", shirt: "#f4efe4", pants: "#2f3542", skin: "#e6b58f" };
-const S = { plan: {}, agents: new Map(), tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], ticketCost: 0 };
+const S = { plan: {}, agents: new Map(), projects: [], hiring: null, tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], ticketCost: 0 };
 let T = 0;
 
-function addAgent({ id, name }, opts = {}) {
+const staff = () => [...S.agents.values()].filter(a => !a.intern);
+let internSeats = 0;
+function addAgent({ id, name, cwd, project }, opts = {}) {
   if (S.agents.has(id)) return S.agents.get(id);
-  const idx = S.agents.size;
-  const seat = opts.intern ? SEATS[3] : SEATS[Math.min(idx, 2)];
-  const start = opts.intern ? SPOTS.door : seat;
-  const a = { n: idx, id, name, look: opts.look || LOOKS[idx % LOOKS.length], x: start.x, y: start.y, dir: "up", seat, path: [], queue: [], cur: null,
+  const idx = S.agents.size, desk = opts.intern ? -1 : staff().length;
+  // Stagiaires : côté nord de la table de réunion (6 places, partagées au-delà) ; employés : un bureau chacun
+  const seat = opts.intern ? { x: 76 + (internSeats++ % 6) * 12, y: 134, face: "down" } : null;
+  const a = { n: idx, id, name, cwd, project, desk, look: opts.look || LOOKS[idx % LOOKS.length], x: 0, y: 0, dir: "up", seat, path: [], queue: [], cur: null,
     arrived: true, dwell: 0, icon: null, label: "Disponible", fatigue: 0, ticket: null, intern: !!opts.intern, parent: opts.parent || null, gone: false };
   S.agents.set(id, a);
-  renderTeam();
+  if (!a.intern) {
+    if (desk >= DESKS.length) { layoutDesks(desk + 1); paint(); }
+    staff().forEach(x => { x.seat = SEATS[x.desk]; });
+  }
+  const start = opts.intern || opts.hired ? SPOTS.door : a.seat;
+  a.x = start.x; a.y = start.y;
+  renderTeam(); if (!a.intern) renderDest();
   return a;
 }
 function enqueue(a, act) { a.queue.push(act); }
@@ -417,7 +442,7 @@ function updateAgent(a, dt) {
   } else {
     a.icon = a.ticket || a.waiting ? "think" : null;
     a.label = a.ticket ? "Réfléchit sur « " + a.ticket.title + " »" : "Disponible";
-    a.dir = "up";
+    a.dir = a.seat.face;
   }
 }
 
@@ -438,12 +463,13 @@ function draw() {
   for (let k = 0; k < Math.min(6, running); k++) note(110 + (k % 2) * 8, 8 + Math.floor(k / 2) * 6, "#9fd0e0");
   for (let k = 0; k < doneCount; k++) note(130 + (k % 2) * 8, 8 + Math.floor(k / 2) * 6, "#b5dd8f");
   // écrans allumés
-  DESKS.forEach(([x, y], i) => {
-    const occ = [...S.agents.values()].find(a => a.seat === SEATS[i] && a.x === SEATS[i].x && a.y === SEATS[i].y && (a.ticket || a.intern));
+  DESKS.forEach(([x, y, w], i) => {
+    const occ = [...S.agents.values()].find(a => a.desk === i && a.x === SEATS[i].x && a.y === SEATS[i].y && a.ticket);
     if (occ) {
-      R(ctx, x + 11, y - 4, 10, 6, "#8fd3ea");
+      const m = x + (w >> 1) - 6;
+      R(ctx, m + 1, y - 4, 10, 6, "#8fd3ea");
       const ln = Math.floor(T / 180) % 5;
-      for (let k = 0; k <= ln && k < 5; k++) R(ctx, x + 12, y - 3 + (k % 3) * 2, 2 + ((k * 3) % 6), 1, "#3f7fa0");
+      for (let k = 0; k <= ln && k < 5; k++) R(ctx, m + 2, y - 3 + (k % 3) * 2, 2 + ((k * 3) % 6), 1, "#3f7fa0");
     }
   });
   if (atSpot("coffee")) for (let k = 0; k < 3; k++) R(ctx, 12 + ((Math.floor(T / 200) + k) % 2), 110 - k * 3 - (Math.floor(T / 150) % 3), 1, 2, "rgba(255,255,255,.7)");
@@ -494,6 +520,7 @@ function renderTeam() {
       a.el.innerHTML = '<canvas width="16" height="20"></canvas><div class="name"></div><div class="status"></div><div class="bar">Fatigue <i><b></b></i></div>';
       portrait(a.el.querySelector("canvas"), a.look);
       a.el.querySelector(".name").textContent = a.intern ? a.name + " (stagiaire)" : a.name;
+      if (a.project) { const p = document.createElement("span"); p.className = "proj"; p.textContent = a.project; p.title = a.cwd; a.el.querySelector(".name").append(p); }
       ul.appendChild(a.el);
     }
     a.el.querySelector(".status").textContent = a.label;
@@ -501,6 +528,23 @@ function renderTeam() {
     b.style.width = Math.round(f * 100) + "%";
     b.style.background = f > .8 ? "var(--berry)" : f > .55 ? "var(--gold)" : "var(--leaf)";
   });
+}
+function renderDest() {
+  const d = $("#dest"), p = $("#project"), keepD = d.value, keepP = p.value;
+  d.innerHTML = ""; p.innerHTML = "";
+  staff().forEach(a => d.add(new Option(a.name + " · " + a.project, a.id)));
+  d.add(new Option("Nouvel employé…", "new"));
+  S.projects.forEach(x => { const o = new Option(x.name, x.cwd); o.title = x.cwd; p.add(o); });
+  p.add(new Option("Autre dossier…", ""));
+  // « Nouvel employé » n'est gardé que si l'utilisateur l'a choisi (sinon : premier employé)
+  if ((keepD !== "new" || d.dataset.chosen) && [...d.options].some(o => o.value === keepD)) d.value = keepD;
+  if ([...p.options].some(o => o.value === keepP)) p.value = keepP;
+  checkDest();
+}
+function checkDest() {
+  const isNew = $("#dest").value === "new", other = isNew && !$("#project").value;
+  $("#project").hidden = !isNew; $("#cwd").hidden = !other;
+  $("#send").disabled = other && !$("#cwd").value.trim();
 }
 function renderStats() {
   $("#sClock").textContent = clock();
@@ -558,7 +602,13 @@ const INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]; let int
 function handle(ev) {
   const a = ev.agent_id ? S.agents.get(ev.agent_id) : null;
   switch (ev.type) {
-    case "hello": ev.team.forEach(m => addAgent(m)); break;
+    case "hello": S.projects = ev.projects || []; ev.team.forEach(m => addAgent(m)); renderDest(); break;
+    case "agent_hired": {
+      const n = addAgent(ev.agent, { hired: true });
+      if (S.hiring === n.cwd) { S.hiring = null; $("#dest").value = n.id; checkDest(); }
+      log(n.name + " rejoint l'équipe sur le projet " + n.project + "."); break;
+    }
+    case "ticket_rejected": log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
     case "ticket_created": S.tickets.push({ id: ev.ticket.id, title: ev.ticket.title, status: "attente" }); log("Nouvelle demande : " + ev.ticket.title); renderTickets(); break;
     case "ticket_assigned": {
       const t = S.tickets.find(x => x.id === ev.ticket_id); if (!t || !a) break;
@@ -581,6 +631,7 @@ function handle(ev) {
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
+      (ev.agents || []).forEach(m => addAgent(m));
       S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });
@@ -634,7 +685,9 @@ const live = (localHost || params.has("live")) && !params.has("demo");
 const transport = { send() {} };
 
 const Demo = {
-  pending: new Map(), seq: 0, ctx: {},
+  pending: new Map(), dest: new Map(), seq: 0, hired: 0, ctx: {},
+  names: ["Léa", "Hugo", "Inès"],
+  projects: ["boutique-en-ligne", "api-factures", "site-vitrine", "app-mobile", "outils-internes"].map(n => ({ cwd: "/home/manager/projets/" + n, name: n })),
   sleep: ms => new Promise(r => setTimeout(r, ms)),
   waitIdle(a) { return new Promise(r => { const iv = setInterval(() => { if (isIdle(a) || (a.x === a.seat.x && a.y === a.seat.y && !a.cur && !a.queue.length)) { clearInterval(iv); r(); } }, 120); }); },
   pick: arr => arr[Math.floor(Math.random() * arr.length)],
@@ -645,7 +698,12 @@ const Demo = {
   titles: ["Ajouter la pagination à l'API des tickets", "Corriger le test d'import CSV", "Rédiger le README d'installation", "Accélérer le build Docker",
     "Écrire un script de sauvegarde nocturne", "Mettre à jour les dépendances", "Ajouter des logs sur l'export PDF", "Nettoyer les TODO du module export"],
   emit(ev) { handle(ev); },
-  newTicket(title) { const id = "t" + (++this.seq); this.emit({ type: "ticket_created", ticket: { id, title } }); },
+  newTicket(title, agentId) { const id = "t" + (++this.seq); this.dest.set(id, agentId); this.emit({ type: "ticket_created", ticket: { id, title } }); },
+  hire(cwd) {
+    const n = this.hired++, name = this.names[n % 3] + (n >= 3 ? " " + (Math.floor(n / 3) + 1) : "");
+    this.emit({ type: "agent_hired", agent: { id: "e" + n, name, cwd, project: cwd.split("/").pop() } });
+    return "e" + n;
+  },
   script() {
     const f = this.pick(this.files), s = [["TodoWrite", "3 tâches"], ["Read", f], ["Grep", this.pick(this.greps)]];
     if (Math.random() < .4) s.push(["WebSearch", this.pick(this.searches)]);
@@ -693,20 +751,26 @@ const Demo = {
     a.busy = false;
   },
   start() {
-    ["Léa", "Hugo", "Inès"].forEach((n, i) => addAgent({ id: "e" + i, name: n }));
+    this.emit({ type: "hello", team: [], projects: this.projects });
+    const ids = this.projects.slice(0, 3).map(p => this.hire(p.cwd));
     const inHours = h => new Date(Date.now() + h * 3600e3).toISOString();
     this.emit({ type: "plan_usage", five_hour: { utilization: 23, resets_at: inHours(3.2) }, seven_day: { utilization: 41, resets_at: inHours(90) } });
     transport.send = msg => {
-      if (msg.type === "new_ticket") this.newTicket(msg.title);
+      if (msg.type === "new_ticket") {
+        const reject = reason => this.emit({ type: "ticket_rejected", title: msg.title, reason });
+        if (msg.agent_id) S.agents.has(msg.agent_id) ? this.newTicket(msg.title, msg.agent_id) : reject("Employé inconnu.");
+        else if (msg.cwd) this.newTicket(msg.title, this.hire(msg.cwd));
+        else reject("Choisis un employé ou un projet pour ce ticket.");
+      }
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
     };
     const shuffled = [...this.titles].sort(() => Math.random() - .5);
-    shuffled.slice(0, 3).forEach(t => this.newTicket(t));
+    shuffled.slice(0, 3).forEach((t, i) => this.newTicket(t, ids[i]));
     let pool = shuffled.slice(3);
     setInterval(() => {
       S.agents.forEach(a => {
         if (a.intern || a.busy || a.ticket || !isIdle(a)) return;
-        const t = S.tickets.find(x => x.status === "attente");
+        const t = S.tickets.find(x => x.status === "attente" && this.dest.get(x.id) === a.id);
         if (t) { a.busy = true; this.runTicket(a, t); }
       });
     }, 700);
@@ -714,7 +778,9 @@ const Demo = {
       if (!$("#auto").checked) return;
       if (S.tickets.filter(t => t.status === "attente").length >= 2) return;
       if (!pool.length) pool = [...this.titles].sort(() => Math.random() - .5);
-      this.newTicket(pool.shift());
+      // De temps en temps, un client arrive avec un nouveau projet : on recrute
+      const free = this.projects.filter(p => !staff().some(a => a.cwd === p.cwd));
+      this.newTicket(pool.shift(), free.length && Math.random() < .25 ? this.hire(free[0].cwd) : this.pick(staff()).id);
     }, 22000);
     log("Bienvenue au bureau. Tu joues le rôle du manager : l'équipe viendra te voir pour les actions sensibles.");
   },
@@ -730,15 +796,20 @@ function startLive() {
   ws.onclose = () => { $("#mode").textContent = "Déconnecté"; $("#mode").classList.remove("live"); log("Connexion au backend perdue. Relance le serveur puis recharge la page."); };
 }
 
+["#dest", "#project"].forEach(s => $(s).addEventListener("change", checkDest));
+$("#dest").addEventListener("change", () => { $("#dest").dataset.chosen = 1; });
+$("#cwd").addEventListener("input", checkDest);
 $("#newTicket").addEventListener("submit", e => {
   e.preventDefault();
-  const v = $("#ticketTitle").value.trim(); if (!v) return;
-  transport.send({ type: "new_ticket", title: v });
-  $("#ticketTitle").value = "";
+  const v = $("#ticketTitle").value.trim(); if (!v || $("#send").disabled) return;
+  const dest = $("#dest").value, cwd = $("#project").value || $("#cwd").value.trim();
+  if (dest === "new") S.hiring = cwd;
+  transport.send(dest === "new" ? { type: "new_ticket", title: v, cwd } : { type: "new_ticket", title: v, agent_id: dest });
+  $("#ticketTitle").value = ""; $("#cwd").value = ""; checkDest();
 });
 
 if (live) startLive(); else Demo.start();
-renderTickets(); renderStats();
+renderTickets(); renderStats(); renderDest();
 
 let last = performance.now();
 function frame(now) {
