@@ -18,6 +18,7 @@ Une interface façon jeu de gestion pour piloter Claude Code. Chaque session Cla
 | Contexte qui grossit | Jauge de fatigue |
 | Compaction du contexte | Pause café |
 | Coût et tokens | Budget de l'entreprise |
+| Session Claude Code lancée dans le terminal | Employé observé (sweat sombre, badge « terminal »), lecture seule |
 
 ## Lancer
 
@@ -35,6 +36,8 @@ L'open space démarre vide. À chaque ticket, tu choisis sa destination : un emp
 
 Variables utiles : `OPENSPACE_CWD` (projet proposé en tête de liste), `OPENSPACE_TEAM` (prénoms des recrues, séparés par des virgules ; réutilisés avec un numéro une fois épuisés, défaut `Léa,Hugo,Inès`), `OPENSPACE_CONTEXT` (taille de fenêtre de repli pour la jauge de fatigue, si la session ne la fournit pas), `OPENSPACE_PERMISSION_MODE` (optionnel, force un mode de permission ; par défaut les employés suivent tes réglages Claude Code : mode, règles allow, hooks, CLAUDE.md ; seules les permissions manquantes arrivent à ton bureau).
 
+Les sessions Claude Code ouvertes dans ton terminal apparaissent aussi, comme employés observés : on voit leur projet, leur statut (tape au clavier / inactif), leurs outils en direct et leur fatigue, mais on ne peut pas leur envoyer de ticket (deux processus sur la même session la corrompraient). Toutes les 2 s, le backend lit `$CLAUDE_CONFIG_DIR/sessions/*.json` (seulement `pid`, `cwd`, `name`, `status`, `sessionId`, `entrypoint` ; sessions `cli` au pid vivant) et la fin de leur transcript `projects/*/<sessionId>.jsonl`. Les fichiers `*.key` et les champs de messagerie ne sont jamais lus ni envoyés au front. La taille de fenêtre n'étant pas dans le transcript, la fatigue suppose `OPENSPACE_CONTEXT`, ou 1 M si le modèle contient `[1m]` ou si le contexte la dépasse.
+
 Le serveur écoute uniquement en local : les employés peuvent exécuter des commandes sur ta machine.
 
 Le WebSocket `/ws` refuse toute connexion dont l'en-tête `Origin` n'est pas l'interface elle-même (`http://127.0.0.1:<port>`, `http://localhost:<port>` ou `http://[::1]:<port>`, même host et port que la requête) : une autre page ouverte dans ton navigateur ne peut ni créer de tickets ni valider de commandes. Derrière un proxy ou sur un autre port, ajoute les origines voulues via `OPENSPACE_ALLOWED_ORIGINS` (séparées par des virgules, ex. `OPENSPACE_ALLOWED_ORIGINS=http://localhost:3000`).
@@ -47,15 +50,18 @@ backend/app.py        FastAPI + WebSocket, un ClaudeSDKClient et une file de tic
 backend/projects.py   Projets récents lus dans les transcripts Claude Code
 backend/events.py     Résumés lisibles des appels d'outils, détection des livrables
 backend/plan_usage.py Usage du plan (fenêtres 5 h et semaine)
+backend/observer.py   Sessions du terminal observées (registre des sessions, suivi des transcripts)
 ```
 
 Le backend traduit les messages du SDK en événements de jeu. Le front ne connaît que ces événements, donc le rendu peut évoluer sans toucher au backend.
 
 ### Événements backend → front
 
-`hello`, `snapshot`, `agent_hired`, `ticket_rejected`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`
+`hello`, `snapshot`, `agent_hired`, `ticket_rejected`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`, `observed_joined`, `observed_left`, `observed_status`
 
 `hello` : `{"team": [{"id", "name", "cwd", "project"}], "projects": [{"cwd", "name"}]}` (employés recrutés, projets proposés). `agent_hired` : `{"agent": {"id", "name", "cwd", "project"}}`. `ticket_rejected` : `{"title", "reason"}`, envoyé au seul onglet émetteur (employé inconnu, dossier introuvable ou ticket sans destination).
+
+`observed_joined` : `{"agent": {"id": "o-<8 premiers caractères du sessionId>", "name", "cwd", "project", "status", "observed": true}}` (session du terminal). `observed_left` : `{"agent_id"}`. `observed_status` : `{"agent_id", "status"}` (`busy` / `idle`). Leur activité passe par les événements habituels (`tool_use`, `tool_result`, `context`). Un `new_ticket` adressé à un employé observé reçoit `ticket_rejected`.
 
 À la connexion, `snapshot` suit `hello` avec l'état courant (employés `agents`, tickets, totaux coût/tokens, fatigue par employé, validations en attente) : recharger l'onglet ou en ouvrir un second ne perd rien. `permission_resolved` ferme la validation sur tous les onglets.
 

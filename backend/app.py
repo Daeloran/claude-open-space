@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import uuid
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from claude_agent_sdk import (
 )
 
 from .events import deliverable_for, summarize_tool
+from .observer import Observer
 from .plan_usage import PlanUsage
 from .projects import recent_projects
 
@@ -88,6 +90,13 @@ class Hub:
                 del self.board[k]
         elif kind == "agent_hired":
             self.agents[ev["agent"]["id"]] = ev["agent"]
+        elif kind == "observed_joined":  # session du terminal, en lecture seule
+            self.agents[ev["agent"]["id"]] = {**ev["agent"], "observed": True}
+        elif kind == "observed_left":
+            self.agents.pop(ev["agent_id"], None)
+            self.context.pop(ev["agent_id"], None)
+        elif kind == "observed_status" and (a := self.agents.get(ev["agent_id"])):
+            a["status"] = ev["status"]
         elif kind == "cost":
             self.totals["usd"] += ev.get("usd") or 0.0
             self.totals["tokens"] += ev.get("tokens") or 0
@@ -268,6 +277,8 @@ async def hire(cwd: str) -> Employee:
 async def route_ticket(data: dict) -> Employee | str:
     """Employé destinataire d'un `new_ticket` (recruté si besoin), ou la raison du refus."""
     if data.get("agent_id"):
+        if hub.agents.get(str(data["agent_id"]), {}).get("observed"):
+            return "Session terminal, lecture seule : ouvre ce terminal pour lui parler."
         return employees.get(str(data["agent_id"])) or "Employé inconnu."
     if data.get("cwd"):
         # abspath, pas resolve() : le chemin reste celui de la liste de projets (liens symboliques gardés)
@@ -282,11 +293,23 @@ async def refresh_plan_usage() -> None:
         await asyncio.sleep(plan.ttl)
 
 
+async def observe_terminal(observer: Observer, interval: float = 2.0) -> None:
+    """Sessions Claude Code du terminal : une passe toutes les `interval` s, une erreur ne tue pas la boucle."""
+    while True:
+        try:
+            await observer.poll()
+        except Exception:
+            logging.getLogger(__name__).exception("observation des sessions terminal")
+        await asyncio.sleep(interval)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     plan_task = asyncio.create_task(refresh_plan_usage(), name="plan-usage")
+    observer = Observer(CLAUDE_CONFIG_DIR, hub.emit, context_window=CONTEXT_WINDOW)
+    observe_task = asyncio.create_task(observe_terminal(observer), name="observer")
     yield
-    tasks = [plan_task, *workers]
+    tasks = [plan_task, observe_task, *workers]
     for t in tasks:
         t.cancel()
     await asyncio.gather(*tasks, return_exceptions=True)
