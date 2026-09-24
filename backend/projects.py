@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from datetime import datetime, timezone
 from itertools import chain, islice
 from pathlib import Path
 
@@ -52,3 +54,46 @@ def recent_projects(config_dir: Path, extra: str | None = None, limit: int = 20)
             if len(out) >= limit:
                 break
     return out[:limit]
+
+
+def _prompt_text(rec: dict) -> str:
+    """Texte d'un prompt utilisateur (hors messages internes et balises de commande), sinon ''."""
+    msg = rec.get("message") if rec.get("type") == "user" and not rec.get("isMeta") else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, list):
+        content = next((b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"), None)
+    text = " ".join(content.split()) if isinstance(content, str) else ""
+    return "" if text.startswith("<") else text
+
+
+def resumable_sessions(config_dir: Path, live: set[str], limit: int = 30) -> list[dict]:
+    """Sessions reprenables, plus récentes d'abord : id, dossier, titre (premier prompt), date ; `live` si un
+    processus CLI la tient encore."""
+    out = []
+    for f in sorted(Path(config_dir).glob("projects/*/*.jsonl"), key=_mtime, reverse=True):
+        if not re.fullmatch(r"[\w-]+", f.stem):
+            continue
+        cwd, title = None, ""
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                for line in islice(fh, MAX_LINES):
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(rec, dict):
+                        continue
+                    cwd = cwd or (rec.get("cwd") if isinstance(rec.get("cwd"), str) else None)
+                    title = title or _prompt_text(rec)
+                    if cwd and title:
+                        break
+        except OSError:
+            continue
+        if not cwd:
+            continue
+        out.append({"session_id": f.stem, "cwd": cwd, "project": Path(cwd).name, "title": title[:80],
+                    "updated": datetime.fromtimestamp(_mtime(f), timezone.utc).isoformat(timespec="seconds"),
+                    **({"live": True} if f.stem in live else {})})
+        if len(out) >= limit:
+            break
+    return out

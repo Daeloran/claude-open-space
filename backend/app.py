@@ -39,7 +39,8 @@ from . import konsole
 from .events import INTERN_NAMES, ask_questions, deliverable_for, summarize_tool, todo_items
 from .observer import Observer, TranscriptTail, chat_entries, chat_history, intern_updates, subagent_file
 from .plan_usage import PlanUsage
-from .projects import recent_projects
+from . import observer as observer_mod
+from .projects import first_cwd, recent_projects, resumable_sessions
 
 WORKDIR = os.environ.get("OPENSPACE_CWD")  # projet proposé en tête de liste
 # Réserve de prénoms pour les recrutements (cyclique, suffixée une fois épuisée)
@@ -176,7 +177,7 @@ observer: Observer | None = None  # créé au démarrage ; connaît le pid de ch
 
 
 class Employee:
-    def __init__(self, idx: int, name: str, cwd: str | None = None) -> None:
+    def __init__(self, idx: int, name: str, cwd: str | None = None, resume: str | None = None) -> None:
         self.id = f"e{idx}"
         self.name = name
         self.cwd = cwd
@@ -195,11 +196,14 @@ class Employee:
             allowed_tools=AUTO_TOOLS,
             permission_mode=PERMISSION_MODE,
             can_use_tool=self.can_use_tool,
+            resume=resume,  # conversation existante reprise dans le jeu (#39)
         )
+        self.set_session(resume)
 
     def info(self) -> dict:
         return {"id": self.id, "name": self.name, "cwd": self.cwd, "project": Path(self.cwd or ".").name,
-                "mode": self.options.permission_mode}
+                "mode": self.options.permission_mode,
+                **({"resumed": self.options.resume} if self.options.resume else {})}
 
     def actor(self, msg) -> str:
         parent = getattr(msg, "parent_tool_use_id", None)
@@ -382,8 +386,29 @@ def recruit_name(n: int) -> str:
     return f"{name} {lap + 1}" if lap else name
 
 
-async def hire(cwd: str) -> Employee:
-    e = Employee(len(employees), recruit_name(len(employees)), cwd)
+def live_session_ids() -> set[str]:
+    """Sessions tenues par un processus Claude Code vivant (terminal) : jamais deux processus sur une session."""
+    alive = observer.pid_alive if observer else observer_mod.pid_alive
+    return {s["session_id"] for s in observer_mod.live_sessions(CLAUDE_CONFIG_DIR, pid_alive=alive)}
+
+
+def resume_target(sid: str) -> tuple[str | None, str | None]:
+    """(dossier de la session `sid` à reprendre dans le jeu, None) ou (None, raison du refus)."""
+    if not re.fullmatch(r"[\w-]+", sid):  # sert dans un glob
+        return None, "Identifiant de session invalide."
+    if not (path := next((CLAUDE_CONFIG_DIR / "projects").glob(f"*/{sid}.jsonl"), None)):
+        return None, "Session introuvable."
+    if any(sid in (e.session_id, e.options.resume) for e in employees.values()):
+        return None, "Cette session est déjà reprise dans le jeu."
+    if sid in live_session_ids():
+        return None, "Claude tourne encore sur cette session dans ton terminal : quitte-le d'abord."
+    if not (cwd := first_cwd(path)):
+        return None, "Dossier de la session inconnu."
+    return cwd, None
+
+
+async def hire(cwd: str, resume: str | None = None) -> Employee:
+    e = Employee(len(employees), recruit_name(len(employees)), cwd, resume)
     employees[e.id] = e
     task = asyncio.create_task(e.run(), name=f"employee-{e.id}")
     workers.add(task)
@@ -538,6 +563,16 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 # ponytail: une ligne lue par l'observateur pendant la lecture peut manquer ou arriver en double
                 hub.chats.setdefault(aid, set()).add(ws)
                 await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": res})
+            elif kind == "list_sessions":
+                sessions = await asyncio.to_thread(resumable_sessions, CLAUDE_CONFIG_DIR, live_session_ids())
+                await ws.send_json({"type": "sessions", "sessions": sessions})
+            elif kind == "resume":
+                sid = str(data.get("session_id") or "")
+                cwd, reason = await asyncio.to_thread(resume_target, sid)
+                if reason:
+                    await ws.send_json({"type": "resume_rejected", "session_id": sid, "reason": reason})
+                else:
+                    await hire(cwd, resume=sid)
             elif kind == "set_mode":
                 aid, mode = str(data.get("agent_id")), data.get("mode")
                 e = employees.get(aid)

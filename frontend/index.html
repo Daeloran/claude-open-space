@@ -229,6 +229,7 @@ ul{list-style:none;margin:0;padding:0}
         <form class="new" id="newTicket">
           <select id="dest" aria-label="Destination du ticket"></select>
           <select id="project" aria-label="Projet du nouvel employé" hidden></select>
+          <select id="session" aria-label="Conversation à reprendre" hidden></select>
           <input type="text" id="cwd" class="row" placeholder="/chemin/du/projet" aria-label="Dossier du projet" autocomplete="off" hidden>
           <input type="text" id="ticketTitle" placeholder="Décris la demande…" aria-label="Nouvelle demande" autocomplete="off">
           <button class="primary" type="submit" id="send">Créer</button>
@@ -677,6 +678,7 @@ function renderDest() {
   d.innerHTML = ""; p.innerHTML = "";
   staff().forEach(a => d.add(new Option(a.name + " · " + a.project + (a.observed ? " · terminal" : ""), a.id)));
   d.add(new Option("Nouvel employé…", "new"));
+  d.add(new Option("Reprendre une conversation…", "resume"));
   S.projects.forEach(x => { const o = new Option(x.name, x.cwd); o.title = x.cwd; p.add(o); });
   p.add(new Option("Autre dossier…", ""));
   // « Nouvel employé » n'est gardé que si l'utilisateur l'a choisi (sinon : premier employé)
@@ -685,9 +687,10 @@ function renderDest() {
   checkDest();
 }
 function checkDest() {
-  const isNew = $("#dest").value === "new", other = isNew && !$("#project").value;
-  $("#project").hidden = !isNew; $("#cwd").hidden = !other;
-  $("#send").disabled = other && !$("#cwd").value.trim();
+  const isNew = $("#dest").value === "new", other = isNew && !$("#project").value, resume = $("#dest").value === "resume";
+  $("#project").hidden = !isNew; $("#cwd").hidden = !other; $("#session").hidden = !resume;
+  if (resume && !$("#session").options.length) { $("#session").add(new Option("Chargement…", "")); transport.send({ type: "list_sessions" }); }
+  $("#send").disabled = (other && !$("#cwd").value.trim()) || (resume && !$("#session").value);
 }
 function renderStats() {
   $("#sClock").textContent = clock();
@@ -940,6 +943,9 @@ function handle(ev) {
     case "agent_hired": {
       const n = addAgent(ev.agent, { hired: true });
       if (S.hiring === n.cwd) { S.hiring = null; $("#dest").value = n.id; checkDest(); }
+      if (S.resuming && ev.agent.resumed === S.resuming.sid) {
+        transport.send({ type: "new_ticket", title: S.resuming.title, agent_id: n.id }); S.resuming = null; $("#dest").value = n.id; checkDest();
+      }
       log(n.name + " rejoint l'équipe sur le projet " + n.project + "."); break;
     }
     case "observed_joined": {
@@ -952,7 +958,7 @@ function handle(ev) {
       if (Chat.id === a.id) closeChat(true);
       a.leaving = true; a.queue = [];
       enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); renderDest(); } });
-      log(a.name + " ferme sa session terminal."); break;
+      log(a.name + " ferme sa session terminal. Pour la continuer ici : « Reprendre une conversation… » dans les tickets."); break;
     }
     case "observed_status": {
       if (!a) break;
@@ -961,6 +967,16 @@ function handle(ev) {
       if (Chat.id === a.id) chatWait(a);
       break;
     }
+    case "sessions": {
+      const s = $("#session"); s.replaceChildren();
+      ev.sessions.forEach(x => {
+        const o = new Option((x.title || "(sans titre)") + " · " + x.project + " · " + new Date(x.updated).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }) + (x.live ? " · ouverte dans le terminal" : ""), x.session_id);
+        o.disabled = !!x.live; o.title = x.cwd; s.add(o);
+      });
+      if (!s.options.length) s.add(new Option("Aucune conversation trouvée", ""));
+      checkDest(); break;
+    }
+    case "resume_rejected": if (S.resuming) { log("Reprise impossible : " + ev.reason); $("#ticketTitle").value ||= S.resuming.title; S.resuming = null; } break;
     case "mode_changed": if (a) { a.mode = ev.mode; log(a.name + " passe en mode " + ev.mode + "."); } break;
     case "mode_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "interrupt_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
@@ -1071,9 +1087,9 @@ const Demo = {
     "Écrire un script de sauvegarde nocturne", "Mettre à jour les dépendances", "Ajouter des logs sur l'export PDF", "Nettoyer les TODO du module export"],
   emit(ev) { handle(ev); },
   newTicket(title, agentId) { const id = "t" + (++this.seq); this.dest.set(id, agentId); this.emit({ type: "ticket_created", ticket: { id, title } }); },
-  hire(cwd) {
+  hire(cwd, resumed) {
     const n = this.hired++, name = this.names[n % 3] + (n >= 3 ? " " + (Math.floor(n / 3) + 1) : "");
-    this.emit({ type: "agent_hired", agent: { id: "e" + n, name, cwd, project: cwd.split("/").pop() } });
+    this.emit({ type: "agent_hired", agent: { id: "e" + n, name, cwd, project: cwd.split("/").pop(), ...(resumed && { resumed }) } });
     return "e" + n;
   },
   script() {
@@ -1226,6 +1242,10 @@ const Demo = {
         this.emit(h ? { type: "chat_history", agent_id: msg.agent_id, entries: h.slice(-200) }
           : { type: "chat_history", agent_id: msg.agent_id, entries: [], error: S.agents.get(msg.agent_id)?.observed ? "Démo : pas d'historique pour cette session." : "Pas encore de conversation : donne-lui un ticket." });
       }, 250);
+      if (msg.type === "list_sessions") this.emit({ type: "sessions", sessions: [
+        { session_id: "demo-s1", cwd: "/home/manager/projets/api-factures", project: "api-factures", title: "Ajoute la pagination sur /factures", updated: new Date(Date.now() - 3600e3).toISOString() },
+        { session_id: "demo-s2", cwd: "/home/manager/projets/outils-internes", project: "outils-internes", title: "Le script de sauvegarde plante", updated: new Date(Date.now() - 86400e3).toISOString(), live: true }] });
+      if (msg.type === "resume") this.hire(this.projects[0].cwd, msg.session_id);
       if (msg.type === "set_mode") { const to = S.agents.get(msg.agent_id); this.emit(to && !to.observed ? { type: "mode_changed", agent_id: msg.agent_id, mode: msg.mode } : { type: "mode_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés changent de mode depuis le jeu." }); }
       if (msg.type === "interrupt") { const to = S.agents.get(msg.agent_id); if (to && !to.observed && to.ticket) this.stop.add(msg.agent_id); else if (to && to.observed) this.emit({ type: "interrupt_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés peuvent être interrompus depuis le jeu." }); }
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
@@ -1263,7 +1283,7 @@ function startLive() {
   ws.onclose = () => { $("#mode").textContent = "Déconnecté"; $("#mode").classList.remove("live"); log("Connexion au backend perdue. Relance le serveur puis recharge la page."); };
 }
 
-["#dest", "#project"].forEach(s => $(s).addEventListener("change", checkDest));
+["#dest", "#project", "#session"].forEach(s => $(s).addEventListener("change", checkDest));
 $("#dest").addEventListener("change", () => { $("#dest").dataset.chosen = 1; });
 $("#cwd").addEventListener("input", checkDest);
 $("#newTicket").addEventListener("submit", e => {
@@ -1271,7 +1291,10 @@ $("#newTicket").addEventListener("submit", e => {
   const v = $("#ticketTitle").value.trim(); if (!v || $("#send").disabled) return;
   const dest = $("#dest").value, cwd = $("#project").value || $("#cwd").value.trim();
   if (dest === "new") S.hiring = cwd;
-  transport.send(dest === "new" ? { type: "new_ticket", title: v, cwd } : { type: "new_ticket", title: v, agent_id: dest });
+  // Reprise : l'employé est recruté sur la conversation, puis reçoit ce ticket (cf. agent_hired)
+  if (dest === "resume") { S.resuming = { sid: $("#session").value, title: v }; transport.send({ type: "resume", session_id: S.resuming.sid }); }
+  else transport.send(dest === "new" ? { type: "new_ticket", title: v, cwd } : { type: "new_ticket", title: v, agent_id: dest });
+  if (dest === "resume") $("#session").replaceChildren(); // liste rafraîchie au prochain choix
   $("#ticketTitle").value = ""; $("#cwd").value = ""; checkDest();
 });
 

@@ -46,3 +46,22 @@ def test_symlinked_paths_are_one_project(tmp_path):
     for i, cwd in enumerate([real, tmp_path / "link" / "eter"]):
         (proj / f"{i}.jsonl").write_text(json.dumps({"cwd": str(cwd)}) + "\n")
     assert [p["name"] for p in projects.recent_projects(tmp_path / "cfg")] == ["eter"]
+
+
+def test_sessions_reprenables_titre_et_live(tmp_path):
+    import json
+    import os
+    from backend.projects import resumable_sessions
+    d = tmp_path / "projects" / "p"
+    d.mkdir(parents=True)
+    lines = [{"type": "permission-mode"}, {"type": "user", "isMeta": True, "cwd": "/w/app", "message": {"content": "meta"}},
+             {"type": "user", "message": {"content": "<command-name>/clear</command-name>"}},
+             {"type": "user", "message": {"content": [{"type": "text", "text": "  Corrige   le bug  "}]}}]
+    (d / "s-1.jsonl").write_text("\n".join(map(json.dumps, lines)) + "\n")
+    (d / "s-2.jsonl").write_text(json.dumps({"type": "user", "cwd": "/w/b", "message": {"content": "x"}}) + "\n")
+    (d / "bad name.jsonl").write_text("{}\n")
+    os.utime(d / "s-1.jsonl", (1, 1))
+    got = resumable_sessions(tmp_path, live={"s-2"})
+    assert [s["session_id"] for s in got] == ["s-2", "s-1"]
+    assert got[0]["live"] is True and "live" not in got[1]
+    assert got[1]["title"] == "Corrige le bug" and got[1]["project"] == "app"
