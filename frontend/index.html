@@ -513,7 +513,7 @@ function renderStats() {
 }
 
 /* ---------- Validations ---------- */
-const permQueue = []; let permShown = null;
+const permQueue = [], permReqs = new Map(); let permShown = null;
 function showNextPerm() {
   if (permShown || !permQueue.length) return;
   const req = permQueue.shift(); permShown = req;
@@ -527,13 +527,20 @@ function showNextPerm() {
 }
 function decide(allow) {
   const req = permShown; if (!req) return;
-  permShown = null; $("#perm").hidden = true;
+  permShown = null; $("#perm").hidden = true; permReqs.delete(req.request_id);
   S.perms++; if (!allow) S.denied++;
   if (req.act) req.act.released = true;
   const a = S.agents.get(req.agent_id);
   log((a ? a.name : "La demande") + (allow ? " a ton feu vert." : " repart sans ton accord."));
   transport.send({ type: "permission_decision", request_id: req.request_id, allow });
   renderStats(); showNextPerm();
+}
+// Tranchée ailleurs (autre onglet) ou remise à zéro : on libère l'employé sans renvoyer de décision
+function dropPerm(rid) {
+  const req = permReqs.get(rid); if (!req) return;
+  permReqs.delete(rid); req.act.released = true;
+  const i = permQueue.indexOf(req); if (i >= 0) permQueue.splice(i, 1);
+  if (permShown === req) { permShown = null; $("#perm").hidden = true; showNextPerm(); }
 }
 $("#allow").onclick = () => decide(true);
 $("#deny").onclick = () => decide(false);
@@ -560,8 +567,21 @@ function handle(ev) {
     case "permission_request": {
       if (!a) break;
       const req = { ...ev };
-      const act = { spot: "manager", icon: "ask", hold: true, label: "Attend ta validation", onArrive: () => { permQueue.push(req); showNextPerm(); } };
-      req.act = act; enqueue(a, act); break;
+      const act = { spot: "manager", icon: "ask", hold: true, label: "Attend ta validation", onArrive: () => { if (permReqs.has(req.request_id)) { permQueue.push(req); showNextPerm(); } } };
+      req.act = act; permReqs.set(req.request_id, req); enqueue(a, act); break;
+    }
+    case "permission_resolved": dropPerm(ev.request_id); break;
+    case "snapshot": {
+      const st = { queued: "attente", assigned: "cours" };
+      S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; });
+      S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
+      S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });
+      const done = ev.tickets.filter(t => t.status === "done" && t.ok !== false);
+      S.done = done.length; S.ticketCost = done.reduce((s, t) => s + (t.usd || 0), 0);
+      S.cost = ev.totals.usd; S.tokens = ev.totals.tokens;
+      [...permReqs.keys()].forEach(dropPerm);
+      ev.pending_permissions.forEach(handle);
+      renderTickets(); renderTeam(); break;
     }
     case "subagent_spawned": {
       const name = ev.agent.name || INTERN_NAMES[internSeq % INTERN_NAMES.length];
