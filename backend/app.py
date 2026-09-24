@@ -22,6 +22,7 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     PermissionResultAllow,
     PermissionResultDeny,
+    RateLimitEvent,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -31,6 +32,7 @@ from claude_agent_sdk import (
 )
 
 from .events import deliverable_for, summarize_tool
+from .plan_usage import PlanUsage
 
 WORKDIR = os.environ.get("OPENSPACE_CWD", os.getcwd())
 TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Léa,Hugo,Inès").split(",") if n.strip()]
@@ -41,6 +43,7 @@ FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 # Outils sans risque : pas de passage par le bureau du manager
 AUTO_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "WebSearch", "Agent"]
 INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
+CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 # Hosts pour lesquels on accepte l'origine http://<Host>. Liste fermée contre le DNS rebinding
 # (evil.com rebindé sur 127.0.0.1 enverrait Host = Origin = evil.com). « testserver » est le
 # Host du TestClient Starlette : inoffensif, un navigateur ne l'enverrait qu'avec un DNS local.
@@ -104,6 +107,7 @@ class Hub:
 
 
 hub = Hub()
+plan = PlanUsage(CLAUDE_CONFIG_DIR)
 
 
 class Employee:
@@ -204,6 +208,9 @@ class Employee:
                                     "ok": not bool(getattr(block, "is_error", False))})
                     if sid := self.subagents.pop(block.tool_use_id, None):
                         await hub.emit({"type": "subagent_done", "agent_id": sid})
+        elif isinstance(msg, RateLimitEvent):
+            if plan.apply_rate_limit(msg.rate_limit_info):
+                await hub.emit(plan.event)
         elif isinstance(msg, SystemMessage):
             if getattr(msg, "subtype", "") == "compact_boundary":
                 await hub.emit({"type": "compaction", "agent_id": self.id})
@@ -230,9 +237,16 @@ class Employee:
 employees = [Employee(i, n) for i, n in enumerate(TEAM)]
 
 
+async def refresh_plan_usage() -> None:
+    while True:
+        await hub.emit(await plan.get())
+        await asyncio.sleep(plan.ttl)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     tasks = [asyncio.create_task(e.run(), name=f"employee-{e.id}") for e in employees]
+    tasks.append(asyncio.create_task(refresh_plan_usage(), name="plan-usage"))
     yield
     for t in tasks:
         t.cancel()
@@ -265,6 +279,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     hub.clients.add(ws)
     await ws.send_json({"type": "hello", "team": [{"id": e.id, "name": e.name} for e in employees]})
     await ws.send_json(hub.snapshot())
+    await ws.send_json(plan.event)
     try:
         while True:
             data = await ws.receive_json()
