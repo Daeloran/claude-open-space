@@ -26,6 +26,7 @@ async def test_arret_du_lifespan_annule_les_employes(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_mod, "ClaudeSDKClient", BlockingClient)
     monkeypatch.setattr(app_mod, "refresh_plan_usage", no_plan)
+    monkeypatch.setattr(app_mod, "CLAUDE_CONFIG_DIR", tmp_path)  # pas d'observation du vrai ~/.claude
     async with app_mod.lifespan(app_mod.app):
         e = await app_mod.hire(str(tmp_path))
         assert e.cwd == str(tmp_path) and e.options.cwd == str(tmp_path)
