@@ -31,7 +31,7 @@ OPENSPACE_CWD=/chemin/du/repo/a/travailler uvicorn backend.app:app --host 127.0.
 
 Puis ouvre http://127.0.0.1:8000. Ajoute `?demo` à l'URL pour jouer avec des événements simulés, sans appeler Claude.
 
-Variables utiles : `OPENSPACE_TEAM` (noms séparés par des virgules), `OPENSPACE_CONTEXT` (taille de fenêtre utilisée pour la jauge de fatigue).
+Variables utiles : `OPENSPACE_TEAM` (noms séparés par des virgules), `OPENSPACE_CONTEXT` (taille de fenêtre de repli pour la jauge de fatigue, si la session ne la fournit pas).
 
 Le serveur écoute uniquement en local : les employés peuvent exécuter des commandes sur ta machine.
 
