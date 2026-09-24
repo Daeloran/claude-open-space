@@ -408,7 +408,7 @@ function addAgent({ id, name, cwd, project, observed, status }, opts = {}) {
   if (!a.intern) seatStaff();
   const start = opts.intern || opts.hired ? SPOTS.door : a.seat;
   a.x = start.x; a.y = start.y;
-  renderTeam(); if (!a.intern && !a.observed) renderDest();
+  renderTeam(); if (!a.intern) renderDest();
   return a;
 }
 function enqueue(a, act) { a.queue.push(act); }
@@ -535,7 +535,7 @@ function renderTeam() {
       portrait(a.el.querySelector("canvas"), a.look);
       a.el.querySelector(".name").textContent = a.intern ? a.name + " (stagiaire)" : a.name;
       if (a.project) { const p = document.createElement("span"); p.className = "proj"; p.textContent = a.project; p.title = a.cwd; a.el.querySelector(".name").append(p); }
-      if (a.observed) { const p = document.createElement("span"); p.className = "proj term"; p.textContent = "terminal"; p.title = "Session Claude Code du terminal : lecture seule"; a.el.querySelector(".name").append(p); }
+      if (a.observed) { const p = document.createElement("span"); p.className = "proj term"; p.textContent = "terminal"; p.title = "Session Claude Code du terminal : les tickets sont tapés dans son onglet Konsole"; a.el.querySelector(".name").append(p); }
       ul.appendChild(a.el);
     }
     a.el.querySelector(".status").textContent = a.label;
@@ -547,7 +547,7 @@ function renderTeam() {
 function renderDest() {
   const d = $("#dest"), p = $("#project"), keepD = d.value, keepP = p.value;
   d.innerHTML = ""; p.innerHTML = "";
-  pilotable().forEach(a => d.add(new Option(a.name + " · " + a.project, a.id)));
+  staff().forEach(a => d.add(new Option(a.name + " · " + a.project + (a.observed ? " · terminal" : ""), a.id)));
   d.add(new Option("Nouvel employé…", "new"));
   S.projects.forEach(x => { const o = new Option(x.name, x.cwd); o.title = x.cwd; p.add(o); });
   p.add(new Option("Autre dossier…", ""));
@@ -631,7 +631,7 @@ function handle(ev) {
     case "observed_left": {
       if (!a || a.leaving) break;
       a.leaving = true; a.queue = [];
-      enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); } });
+      enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); renderDest(); } });
       log(a.name + " ferme sa session terminal."); break;
     }
     case "observed_status": if (a) a.status = ev.status; break;
@@ -806,7 +806,7 @@ const Demo = {
       if (msg.type === "new_ticket") {
         const reject = reason => this.emit({ type: "ticket_rejected", title: msg.title, reason });
         const to = msg.agent_id && S.agents.get(msg.agent_id);
-        if (to && to.observed) reject("Session terminal, lecture seule : ouvre ce terminal pour lui parler.");
+        if (to && to.observed) reject("Démo : pas de vrai terminal où taper ce ticket.");
         else if (msg.agent_id) to ? this.newTicket(msg.title, msg.agent_id) : reject("Employé inconnu.");
         else if (msg.cwd) this.newTicket(msg.title, this.hire(msg.cwd));
         else reject("Choisis un employé ou un projet pour ce ticket.");

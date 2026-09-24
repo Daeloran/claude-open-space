@@ -18,7 +18,7 @@ Une interface façon jeu de gestion pour piloter Claude Code. Chaque session Cla
 | Contexte qui grossit | Jauge de fatigue |
 | Compaction du contexte | Pause café |
 | Coût et tokens | Budget de l'entreprise |
-| Session Claude Code lancée dans le terminal | Employé observé (sweat sombre, badge « terminal »), lecture seule |
+| Session Claude Code lancée dans le terminal | Employé observé (sweat sombre, badge « terminal ») ; ses tickets sont tapés dans son onglet Konsole |
 
 ## Lancer
 
@@ -36,7 +36,11 @@ L'open space démarre vide. À chaque ticket, tu choisis sa destination : un emp
 
 Variables utiles : `OPENSPACE_CWD` (projet proposé en tête de liste), `OPENSPACE_TEAM` (prénoms des recrues, séparés par des virgules ; réutilisés avec un numéro une fois épuisés, défaut `Léa,Hugo,Inès`), `OPENSPACE_CONTEXT` (taille de fenêtre de repli pour la jauge de fatigue, si la session ne la fournit pas), `OPENSPACE_PERMISSION_MODE` (optionnel, force un mode de permission ; par défaut les employés suivent tes réglages Claude Code : mode, règles allow, hooks, CLAUDE.md ; seules les permissions manquantes arrivent à ton bureau).
 
-Les sessions Claude Code ouvertes dans ton terminal apparaissent aussi, comme employés observés : on voit leur projet, leur statut (tape au clavier / inactif), leurs outils en direct et leur fatigue, mais on ne peut pas leur envoyer de ticket (deux processus sur la même session la corrompraient). Toutes les 2 s, le backend lit `$CLAUDE_CONFIG_DIR/sessions/*.json` (seulement `pid`, `cwd`, `name`, `status`, `sessionId`, `entrypoint` ; sessions `cli` au pid vivant) et la fin de leur transcript `projects/*/<sessionId>.jsonl`. Les fichiers `*.key` et les champs de messagerie ne sont jamais lus ni envoyés au front. La taille de fenêtre n'étant pas dans le transcript, la fatigue la déduit du `model` de tes réglages Claude Code (`<projet>/.claude/settings.local.json`, puis `<projet>/.claude/settings.json`, puis `$CLAUDE_CONFIG_DIR/settings.json` ; `[1m]` → 1 M, sinon `OPENSPACE_CONTEXT`), lus à l'arrivée de la session ; en secours, 1 M si le modèle du transcript contient `[1m]` ou si le contexte dépasse la fenêtre. Un changement de modèle en cours de session (`/model`, réglages modifiés) n'est pris en compte qu'au prochain démarrage de la session ou de l'Open Space.
+Les sessions Claude Code ouvertes dans ton terminal apparaissent aussi, comme employés observés : on voit leur projet, leur statut (tape au clavier / inactif), leurs outils en direct et leur fatigue, et on peut leur donner un ticket (voir ci-dessous). Toutes les 2 s, le backend lit `$CLAUDE_CONFIG_DIR/sessions/*.json` (seulement `pid`, `cwd`, `name`, `status`, `sessionId`, `entrypoint` ; sessions `cli` au pid vivant) et la fin de leur transcript `projects/*/<sessionId>.jsonl`. Les fichiers `*.key` et les champs de messagerie ne sont jamais lus ni envoyés au front. La taille de fenêtre n'étant pas dans le transcript, la fatigue la déduit du `model` de tes réglages Claude Code (`<projet>/.claude/settings.local.json`, puis `<projet>/.claude/settings.json`, puis `$CLAUDE_CONFIG_DIR/settings.json` ; `[1m]` → 1 M, sinon `OPENSPACE_CONTEXT`), lus à l'arrivée de la session ; en secours, 1 M si le modèle du transcript contient `[1m]` ou si le contexte dépasse la fenêtre. Un changement de modèle en cours de session (`/model`, réglages modifiés) n'est pris en compte qu'au prochain démarrage de la session ou de l'Open Space.
+
+Un ticket adressé à un employé terminal (« Nom · projet · terminal » dans le sélecteur) est tapé dans son onglet Konsole puis validé, comme si tu l'avais saisi : la session le traite dans son propre contexte (pas de second processus sur la même session). Le backend retrouve l'onglet via `KONSOLE_DBUS_SERVICE` et `KONSOLE_DBUS_SESSION` dans `/proc/<pid>/environ` (seules ces deux variables sont lues, rien n'est journalisé), puis appelle `org.kde.konsole.Session.sendText` par `gdbus call` (à défaut `busctl --user call`), en sous-processus sans shell. Garde-fou : le texte n'est envoyé que si `foregroundProcessId()` de l'onglet est le pid de la session Claude ; sinon (session quittée, shell, autre programme au premier plan) rien n'est tapé et le ticket est refusé avec la raison. Les caractères de contrôle du ticket sont retirés (sauf retour à la ligne et tabulation) ; un ticket multi-ligne part en « bracketed paste » pour arriver en un seul message. Le ticket passe « fait » au premier des deux signaux : fin de réponse lue dans le transcript (message assistant principal avec `stop_reason: "end_turn"`, horodaté après l'envoi), ou retour de la session à inactive après avoir été occupée ; il échoue si la session part. Une réponse plus rapide que la relève du statut (2 s) est donc bien vue. Si Claude répondait encore à autre chose au moment de l'envoi, la fin de cette réponse-là peut clore le ticket un peu tôt. Un seul ticket à la fois par session terminal. Limite : Konsole uniquement (pas tmux ni autres terminaux), et une session lancée hors Konsole reçoit `ticket_rejected`.
+
+Prérequis : Konsole bloque `sendText` par défaut. Active « Enable the security sensitive parts of the DBus API » (Configurer Konsole → Général). Contrepartie : tout programme ayant accès à ton bus de session D-Bus peut alors taper dans tes onglets Konsole.
 
 Le serveur écoute uniquement en local : les employés peuvent exécuter des commandes sur ta machine.
 
@@ -53,17 +57,18 @@ backend/projects.py   Projets récents lus dans les transcripts Claude Code
 backend/events.py     Résumés lisibles des appels d'outils, détection des livrables
 backend/plan_usage.py Usage du plan (fenêtres 5 h et semaine)
 backend/observer.py   Sessions du terminal observées (registre des sessions, suivi des transcripts)
+backend/konsole.py    Envoi d'un prompt dans l'onglet Konsole d'une session terminal (D-Bus)
 ```
 
 Le backend traduit les messages du SDK en événements de jeu. Le front ne connaît que ces événements, donc le rendu peut évoluer sans toucher au backend.
 
 ### Événements backend → front
 
-`hello`, `snapshot`, `agent_hired`, `ticket_rejected`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`, `observed_joined`, `observed_left`, `observed_status`
+`hello`, `snapshot`, `agent_hired`, `ticket_rejected`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`, `observed_joined`, `observed_left`, `observed_status`, `observed_turn_end`
 
 `hello` : `{"team": [{"id", "name", "cwd", "project"}], "projects": [{"cwd", "name"}]}` (employés recrutés, projets proposés). `agent_hired` : `{"agent": {"id", "name", "cwd", "project"}}`. `ticket_rejected` : `{"title", "reason"}`, envoyé au seul onglet émetteur (employé inconnu, dossier introuvable ou ticket sans destination).
 
-`observed_joined` : `{"agent": {"id": "o-<8 premiers caractères du sessionId>", "name", "cwd", "project", "status", "observed": true}}` (session du terminal). `observed_left` : `{"agent_id"}`. `observed_status` : `{"agent_id", "status"}` (`busy` / `idle`). Leur activité passe par les événements habituels (`tool_use`, `tool_result`, `context`). Un `new_ticket` adressé à un employé observé reçoit `ticket_rejected`.
+`observed_joined` : `{"agent": {"id": "o-<8 premiers caractères du sessionId>", "name", "cwd", "project", "status", "observed": true}}` (session du terminal). `observed_left` : `{"agent_id"}`. `observed_status` : `{"agent_id", "status"}` (`busy` / `idle`). `observed_turn_end` : `{"agent_id", "at"}`, fin d'une réponse de la session (horodatage du transcript), sert à clore son ticket ; le front l'ignore. Leur activité passe par les événements habituels (`tool_use`, `tool_result`, `context`). Un `new_ticket` adressé à un employé observé est tapé dans son onglet Konsole (`ticket_created` puis `ticket_assigned`, `ticket_done` quand il repasse `idle` après `busy`), ou reçoit `ticket_rejected` (onglet introuvable, Claude pas au premier plan, D-Bus indisponible, ticket déjà en cours).
 
 À la connexion, `snapshot` suit `hello` avec l'état courant (employés `agents`, tickets, totaux coût/tokens, fatigue par employé, validations en attente) : recharger l'onglet ou en ouvrir un second ne perd rien. `permission_resolved` ferme la validation sur tous les onglets.
 

@@ -12,6 +12,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -33,6 +34,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from . import konsole
 from .events import deliverable_for, summarize_tool
 from .observer import Observer
 from .plan_usage import PlanUsage
@@ -76,6 +78,8 @@ class Hub:
         self.totals = {"usd": 0.0, "tokens": 0}
         self.context: dict[str, float] = {}  # agent_id -> ratio
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
+        # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
+        self.terminal: dict[str, dict] = {}
 
     def track(self, ev: dict) -> None:
         kind = ev.get("type")
@@ -90,7 +94,7 @@ class Hub:
                 del self.board[k]
         elif kind == "agent_hired":
             self.agents[ev["agent"]["id"]] = ev["agent"]
-        elif kind == "observed_joined":  # session du terminal, en lecture seule
+        elif kind == "observed_joined":  # session du terminal
             self.agents[ev["agent"]["id"]] = {**ev["agent"], "observed": True}
         elif kind == "observed_left":
             self.agents.pop(ev["agent_id"], None)
@@ -119,10 +123,37 @@ class Hub:
                 await ws.send_json(event)
             except Exception:
                 self.clients.discard(ws)
+        await self.follow_terminal(event)
+
+    async def follow_terminal(self, ev: dict) -> None:
+        """Ticket d'une session terminal terminé au premier signal : fin de réponse dans le transcript
+        (`observed_turn_end` postérieur à l'envoi), retour idle après busy, ou départ de la session."""
+        kind, aid = ev.get("type"), ev.get("agent_id")
+        t = self.terminal.get(aid)
+        if not t or not t["id"]:
+            return
+        if kind == "observed_status" and ev.get("status") == "busy":
+            t["busy"] = True
+            return
+        # ponytail: une réponse en cours au moment de l'envoi (prompt mis en file) peut clore le ticket tôt
+        if (kind == "observed_left" or (kind == "observed_status" and t["busy"])
+                or (kind == "observed_turn_end" and _after(ev.get("at"), t.get("sent")))):
+            del self.terminal[aid]
+            await self.emit({"type": "ticket_done", "ticket_id": t["id"], "agent_id": aid,
+                             "usd": 0.0, "tokens": 0, "ok": kind != "observed_left"})
+
+
+def _after(at, sent: datetime | None) -> bool:
+    """Horodatage du transcript postérieur à l'envoi (illisible ou absent : ligne nouvelle, on la prend)."""
+    try:
+        return sent is None or datetime.fromisoformat(str(at)) >= sent
+    except (TypeError, ValueError):
+        return True
 
 
 hub = Hub()
 plan = PlanUsage(CLAUDE_CONFIG_DIR)
+observer: Observer | None = None  # créé au démarrage ; connaît le pid de chaque session terminal
 
 
 class Employee:
@@ -274,17 +305,31 @@ async def hire(cwd: str) -> Employee:
     return e
 
 
-async def route_ticket(data: dict) -> Employee | str:
-    """Employé destinataire d'un `new_ticket` (recruté si besoin), ou la raison du refus."""
+async def route_ticket(data: dict) -> Employee | dict | str:
+    """Destinataire d'un `new_ticket` : employé (recruté si besoin), session terminal (son agent), ou la raison du refus."""
     if data.get("agent_id"):
-        if hub.agents.get(str(data["agent_id"]), {}).get("observed"):
-            return "Session terminal, lecture seule : ouvre ce terminal pour lui parler."
+        if (agent := hub.agents.get(str(data["agent_id"]), {})).get("observed"):
+            return agent
         return employees.get(str(data["agent_id"])) or "Employé inconnu."
     if data.get("cwd"):
         # abspath, pas resolve() : le chemin reste celui de la liste de projets (liens symboliques gardés)
         path = os.path.abspath(os.path.expanduser(str(data["cwd"])))
         return await hire(path) if os.path.isdir(path) else f"Dossier introuvable : {data['cwd']}"
     return "Choisis un employé ou un projet pour ce ticket."
+
+
+async def type_in_terminal(agent: dict, title: str) -> str | None:
+    """Tape le ticket dans l'onglet Konsole de la session terminal. None si envoyé, sinon la raison."""
+    aid = agent["id"]
+    pid = agent.get("pid") or (observer.watched.get(aid, {}).get("pid") if observer else None)
+    if not pid:
+        return "Onglet Konsole introuvable pour cette session terminal."
+    if aid in hub.terminal:
+        return "Cette session terminal a déjà un ticket en cours."
+    hub.terminal[aid] = {"id": None, "busy": False, "sent": datetime.now(timezone.utc)}  # réservé pendant l'envoi (deux onglets du jeu)
+    if reason := await konsole.send_prompt(pid, title):
+        del hub.terminal[aid]
+    return reason
 
 
 async def refresh_plan_usage() -> None:
@@ -305,6 +350,7 @@ async def observe_terminal(observer: Observer, interval: float = 2.0) -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
+    global observer
     plan_task = asyncio.create_task(refresh_plan_usage(), name="plan-usage")
     observer = Observer(CLAUDE_CONFIG_DIR, hub.emit, context_window=CONTEXT_WINDOW)
     observe_task = asyncio.create_task(observe_terminal(observer), name="observer")
@@ -350,13 +396,20 @@ async def ws_endpoint(ws: WebSocket) -> None:
             kind = data.get("type")
             if kind == "new_ticket" and (title := str(data.get("title", "")).strip()):
                 target = await route_ticket(data)
+                if isinstance(target, dict):  # session terminal : le prompt est tapé dans son onglet
+                    target = await type_in_terminal(target, title) or target
                 if isinstance(target, str):  # refus : seul l'émetteur est prévenu
                     await ws.send_json({"type": "ticket_rejected", "title": title, "reason": target})
                     continue
                 hub.ticket_seq += 1
                 ticket = Ticket(f"t{hub.ticket_seq}", title)
+                if isinstance(target, dict):
+                    hub.terminal[target["id"]]["id"] = ticket.id
                 await hub.emit({"type": "ticket_created", "ticket": {"id": ticket.id, "title": ticket.title}})
-                await target.tickets.put(ticket)
+                if isinstance(target, dict):
+                    await hub.emit({"type": "ticket_assigned", "ticket_id": ticket.id, "agent_id": target["id"]})
+                else:
+                    await target.tickets.put(ticket)
             elif kind == "permission_decision":
                 rid, allow = str(data.get("request_id")), bool(data.get("allow"))
                 fut = hub.pending.get(rid)
