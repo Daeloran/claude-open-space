@@ -31,7 +31,7 @@ OPENSPACE_CWD=/chemin/du/repo/a/travailler uvicorn backend.app:app --host 127.0.
 
 Puis ouvre http://127.0.0.1:8000. Ajoute `?demo` à l'URL pour jouer avec des événements simulés, sans appeler Claude.
 
-Variables utiles : `OPENSPACE_TEAM` (noms séparés par des virgules), `OPENSPACE_CONTEXT` (taille de fenêtre utilisée pour la jauge de fatigue).
+Variables utiles : `OPENSPACE_TEAM` (noms séparés par des virgules), `OPENSPACE_CONTEXT` (taille de fenêtre utilisée pour la jauge de fatigue), `OPENSPACE_PERMISSION_MODE` (optionnel, force un mode de permission ; par défaut les employés suivent tes réglages Claude Code : mode, règles allow, hooks, CLAUDE.md ; seules les permissions manquantes arrivent à ton bureau).
 
 Le serveur écoute uniquement en local : les employés peuvent exécuter des commandes sur ta machine.
 
@@ -63,4 +63,3 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 - Un open space par dépôt, avec navigation entre les étages
 - Tableau de bord de direction historisé (coût par jour, par employé)
 - Recrutement : ajouter ou licencier un employé pendant la partie
-- Vérifier les noms des champs du SDK selon la version installée (`total_cost_usd`, `usage`, `parent_tool_use_id`, sous-type `compact_boundary`)

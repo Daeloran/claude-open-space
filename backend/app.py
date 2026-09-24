@@ -35,9 +35,11 @@ from .events import deliverable_for, summarize_tool
 WORKDIR = os.environ.get("OPENSPACE_CWD", os.getcwd())
 TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Léa,Hugo,Inès").split(",") if n.strip()]
 CONTEXT_WINDOW = int(os.environ.get("OPENSPACE_CONTEXT", "200000"))
+# Non défini : le defaultMode des réglages Claude Code de l'utilisateur s'applique
+PERMISSION_MODE = os.environ.get("OPENSPACE_PERMISSION_MODE") or None
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 # Outils sans risque : pas de passage par le bureau du manager
-AUTO_TOOLS = ["Read", "Glob", "Grep", "LS", "TodoWrite", "WebSearch", "Task"]
+AUTO_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "WebSearch", "Agent"]
 INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
 # Hosts pour lesquels on accepte l'origine http://<Host>. Liste fermée contre le DNS rebinding
 # (evil.com rebindé sur 127.0.0.1 enverrait Host = Origin = evil.com). « testserver » est le
@@ -81,7 +83,7 @@ class Employee:
         self.options = ClaudeAgentOptions(
             cwd=WORKDIR,
             allowed_tools=AUTO_TOOLS,
-            permission_mode="acceptEdits",  # les éditions passent, Bash et le reste demandent
+            permission_mode=PERMISSION_MODE,
             can_use_tool=self.can_use_tool,
         )
 
