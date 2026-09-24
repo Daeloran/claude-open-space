@@ -41,13 +41,16 @@ Le serveur écoute uniquement en local : les employés peuvent exécuter des com
 frontend/index.html   Rendu canvas pixel art, UI, moteur de démo (un seul fichier)
 backend/app.py        FastAPI + WebSocket, un ClaudeSDKClient par employé
 backend/events.py     Résumés lisibles des appels d'outils, détection des livrables
+backend/plan_usage.py Usage du plan (fenêtres 5 h et semaine)
 ```
 
 Le backend traduit les messages du SDK en événements de jeu. Le front ne connaît que ces événements, donc le rendu peut évoluer sans toucher au backend.
 
 ### Événements backend → front
 
-`hello`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`
+`hello`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`
+
+`plan_usage` : `{"five_hour": {"utilization": 42, "resets_at": "<ISO 8601>"} | null, "seven_day": {...} | null}`, `utilization` en % (0-100). Envoyé à la connexion, toutes les 3 min et à chaque `RateLimitEvent` du SDK. Source : token OAuth de `$CLAUDE_CONFIG_DIR/.credentials.json` (défaut `~/.claude`) et endpoint non documenté `GET https://api.anthropic.com/api/oauth/usage` ; `null` (« — » dans le bandeau) si indisponible.
 
 ### Messages front → backend
 
