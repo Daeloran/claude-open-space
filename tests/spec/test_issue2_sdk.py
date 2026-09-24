@@ -7,6 +7,7 @@ Live (-m live) : un vrai serveur uvicorn traite des tickets de bout en bout.
 
 import asyncio
 import dataclasses
+import importlib
 import json
 import os
 import re
@@ -67,6 +68,22 @@ def test_requirements_pin_minimum_sdk_version():
     )
 
 
+def test_permission_mode_follows_env_variable(monkeypatch):
+    import backend.app
+
+    try:
+        monkeypatch.delenv("OPENSPACE_PERMISSION_MODE", raising=False)
+        importlib.reload(backend.app)
+        assert backend.app.employees[0].options.permission_mode is None
+
+        monkeypatch.setenv("OPENSPACE_PERMISSION_MODE", "default")
+        importlib.reload(backend.app)
+        assert backend.app.employees[0].options.permission_mode == "default"
+    finally:
+        monkeypatch.delenv("OPENSPACE_PERMISSION_MODE", raising=False)
+        importlib.reload(backend.app)
+
+
 def test_readme_no_longer_lists_sdk_field_check():
     readme = (ROOT / "README.md").read_text()
     assert "Vérifier les noms des champs du SDK" not in readme
@@ -88,7 +105,12 @@ def server(tmp_path):
     (workdir / "hello.py").write_text("print('hello')\n")
 
     port = _free_port()
-    env = {**os.environ, "OPENSPACE_CWD": str(workdir), "OPENSPACE_TEAM": "Léa"}
+    env = {
+        **os.environ,
+        "OPENSPACE_CWD": str(workdir),
+        "OPENSPACE_TEAM": "Léa",
+        "OPENSPACE_PERMISSION_MODE": "default",
+    }
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.app:app", "--host", "127.0.0.1", "--port", str(port)],
         cwd=ROOT,
@@ -156,7 +178,7 @@ async def test_live_simple_ticket_full_sequence(server):
 
 
 @pytest.mark.live
-async def test_live_bash_ticket_asks_permission_and_respects_denial(server):
+async def test_live_bash_mkdir_asks_permission_and_respects_denial(server, tmp_path):
     requests = []
 
     def deny(ev):
@@ -164,9 +186,16 @@ async def test_live_bash_ticket_asks_permission_and_respects_denial(server):
         return {"type": "permission_decision", "request_id": ev["request_id"], "allow": False}
 
     events = await asyncio.wait_for(
-        _run_ticket(server, "Exécute la commande `echo bonjour` avec l'outil Bash", on_permission=deny),
+        _run_ticket(
+            server,
+            "Crée un dossier nommé nouveau_dossier avec la commande Bash mkdir",
+            on_permission=deny,
+        ),
         LIVE_TIMEOUT,
     )
     types = _types(events)
-    assert requests, f"aucun permission_request reçu : {types}"
+    assert any(r.get("tool") == "Bash" for r in requests), (
+        f"aucun permission_request Bash reçu : {requests} / {types}"
+    )
     assert types[-1] == "ticket_done", types
+    assert not (tmp_path / "chantier" / "nouveau_dossier").exists()
