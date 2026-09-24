@@ -11,6 +11,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -38,6 +39,10 @@ FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 # Outils sans risque : pas de passage par le bureau du manager
 AUTO_TOOLS = ["Read", "Glob", "Grep", "LS", "TodoWrite", "WebSearch", "Task"]
 INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
+# Hosts pour lesquels on accepte l'origine http://<Host>. Liste fermée contre le DNS rebinding
+# (evil.com rebindé sur 127.0.0.1 enverrait Host = Origin = evil.com). « testserver » est le
+# Host du TestClient Starlette : inoffensif, un navigateur ne l'enverrait qu'avec un DNS local.
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
 
 
 @dataclass
@@ -195,8 +200,21 @@ async def index() -> FileResponse:
     return FileResponse(FRONTEND)
 
 
+def origin_allowed(origin: str | None, host: str | None) -> bool:
+    """Anti Cross-Site WebSocket Hijacking : seule l'interface servie par l'Open Space peut se connecter."""
+    if not origin:
+        return False
+    extra = {o.strip() for o in os.environ.get("OPENSPACE_ALLOWED_ORIGINS", "").split(",") if o.strip()}
+    if origin in extra:
+        return True
+    return bool(host) and urlsplit(f"//{host}").hostname in LOOPBACK_HOSTS and origin == f"http://{host}"
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    if not origin_allowed(ws.headers.get("origin"), ws.headers.get("host")):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     hub.clients.add(ws)
     await ws.send_json({"type": "hello", "team": [{"id": e.id, "name": e.name} for e in employees]})
