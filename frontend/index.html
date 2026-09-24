@@ -112,6 +112,13 @@ ul{list-style:none;margin:0;padding:0}
 .modal h2{margin:0;font-size:1.2rem}
 .modal p{margin:4px 0}
 .modal code{display:block;background:#2f3542;color:#b5f5a5;padding:6px 8px;font-family:ui-monospace,"Courier New",monospace;font-size:.9rem;overflow-x:auto;white-space:pre}
+.modal .ask{grid-column:1/-1;display:grid;gap:10px;max-height:50vh;overflow-y:auto}
+.modal .ask[hidden]{display:none}
+.modal fieldset{margin:0;border:2px solid var(--panel-2);padding:6px 10px}
+.modal legend{font-weight:600;padding:0 4px}
+.modal .ask label{display:flex;gap:8px;align-items:baseline;padding:2px 0;cursor:pointer}
+.modal .ask small{color:var(--ink-soft)}
+.modal .ask input[type=text]{font:inherit;flex:1;min-width:0}
 .modal .actions{grid-column:1/-1;display:flex;justify-content:flex-end;gap:8px}
 /* Panneau de discussion : cadre du jeu, contenu en police système pour la lecture */
 .team li.talk{cursor:pointer}
@@ -252,6 +259,7 @@ ul{list-style:none;margin:0;padding:0}
       <p id="permText"></p>
       <code id="permCmd"></code>
     </div>
+    <form class="ask" id="permAsk" hidden></form>
     <div class="actions">
       <button class="danger" id="deny" type="button">Refuser</button>
       <button class="primary" id="allow" type="button">Autoriser</button>
@@ -688,17 +696,58 @@ function showNextPerm() {
   const q = { Bash: "Je peux lancer cette commande ?", WebFetch: "Je peux consulter cette page ?", Write: "Je peux créer ce fichier ?", Edit: "Je peux modifier ce fichier ?", MultiEdit: "Je peux modifier ce fichier ?" };
   $("#permText").textContent = q[req.tool] || "Je peux utiliser l'outil " + req.tool + " ?";
   $("#permCmd").textContent = req.summary || req.tool;
+  const ask = !!req.questions; // AskUserQuestion : formulaire de réponses au lieu d'Autoriser / Refuser
+  $("#permCmd").hidden = ask; $("#permAsk").hidden = !ask; $("#permAsk").replaceChildren();
+  $("#allow").textContent = ask ? "Envoyer" : "Autoriser"; $("#deny").textContent = ask ? "Ignorer" : "Refuser";
+  if (ask) {
+    $("#permText").textContent = "J'ai besoin de ton avis :";
+    req.questions.forEach((q, i) => $("#permAsk").append(askField(q, i)));
+  }
+  checkAsk();
   if (a) portrait($("#portrait"), a.look);
-  $("#perm").hidden = false; $("#allow").focus({ preventScroll: true });
+  $("#perm").hidden = false; (ask ? $("#permAsk input") : $("#allow")).focus({ preventScroll: true });
 }
+function askField(q, i) {
+  const f = document.createElement("fieldset"), lg = document.createElement("legend");
+  lg.textContent = (q.header ? q.header + " : " : "") + q.question; f.append(lg);
+  const type = q.multi ? "checkbox" : "radio", row = (input, ...content) => {
+    const l = document.createElement("label"); input.type = type; input.name = "q" + i; l.append(input, ...content); f.append(l); return input;
+  };
+  q.options.forEach(o => {
+    const inp = document.createElement("input"); inp.value = o.label;
+    const d = document.createElement("small"); d.textContent = o.description;
+    row(inp, document.createTextNode(o.label + " "), d);
+  });
+  const other = document.createElement("input"), txt = document.createElement("input");
+  other.dataset.other = "1"; txt.type = "text"; txt.placeholder = "Autre…"; txt.setAttribute("aria-label", "Autre réponse");
+  txt.oninput = () => { other.checked = !!txt.value.trim(); checkAsk(); };
+  row(other, txt);
+  return f;
+}
+// Réponse par question : libellés cochés (choix multiple joints par « , »), « Autre » = texte saisi
+function askAnswers() {
+  const out = {};
+  permShown.questions.forEach((q, i) => {
+    const v = [...$("#permAsk").querySelectorAll(`input[name="q${i}"]:checked`)]
+      .map(x => x.dataset.other ? x.nextElementSibling.value.trim() : x.value).filter(Boolean);
+    if (v.length) out[q.question] = v.join(", ");
+  });
+  return out;
+}
+function checkAsk() {
+  $("#allow").disabled = !!(permShown && permShown.questions) && Object.keys(askAnswers()).length < permShown.questions.length;
+}
+$("#permAsk").addEventListener("change", checkAsk);
+$("#permAsk").addEventListener("submit", e => { e.preventDefault(); if (!$("#allow").disabled) decide(true); });
 function decide(allow) {
   const req = permShown; if (!req) return;
+  const answers = allow && req.questions ? askAnswers() : undefined;
   permShown = null; $("#perm").hidden = true; permReqs.delete(req.request_id);
   S.perms++; if (!allow) S.denied++;
   if (req.act) req.act.released = true;
   const a = S.agents.get(req.agent_id);
-  log((a ? a.name : "La demande") + (allow ? " a ton feu vert." : " repart sans ton accord."));
-  transport.send({ type: "permission_decision", request_id: req.request_id, allow });
+  log((a ? a.name : "La demande") + (req.questions ? (allow ? " a ta réponse." : " repart sans réponse.") : allow ? " a ton feu vert." : " repart sans ton accord."));
+  transport.send({ type: "permission_decision", request_id: req.request_id, allow, ...(answers && { answers }) });
   renderStats(); showNextPerm();
 }
 // Tranchée ailleurs (autre onglet) ou remise à zéro : on libère l'employé sans renvoyer de décision
@@ -736,7 +785,7 @@ function toolRow(e) {
     e.questions.forEach(x => {
       const p = document.createElement("p"), ul = document.createElement("ul");
       p.textContent = x.question + (x.multi ? " (plusieurs choix)" : "");
-      x.options.forEach(o => { const li = document.createElement("li"); li.textContent = o; ul.append(li); });
+      x.options.forEach(o => { const li = document.createElement("li"); li.textContent = o.label + (o.description ? " — " + o.description : ""); ul.append(li); });
       q.append(p, ul);
     });
     d.insertBefore(q, pre);
@@ -975,6 +1024,9 @@ const Demo = {
     if (Math.random() < .35) s.push(["Task", "Analyser " + this.pick(["le module export", "les tests", "la config Docker"])]);
     s.push(["Edit", f, { kind: "edit" }], ["Bash", "pytest -q"]);
     if (Math.random() < .6) s.push(["Bash", this.pick(this.risky), { perm: true }]);
+    if (Math.random() < .4) s.push(["AskUserQuestion", "Quelle stratégie de cache ?", { perm: true, questions: [
+      { question: "Quelle stratégie de cache ?", header: "Cache", multi: false, options: [{ label: "Redis", description: "partagé entre instances" }, { label: "Mémoire", description: "simple, par processus" }] },
+      { question: "Quels tests ajouter ?", header: "Tests", multi: true, options: [{ label: "Unitaires", description: "logique du cache" }, { label: "Intégration", description: "avec l'API" }] }] }]);
     if (Math.random() < .5) s.push(["Write", "docs/" + this.pick(["notes.md", "changelog.md", "api.md"]), { kind: "write" }]);
     return s;
   },
@@ -987,7 +1039,7 @@ const Demo = {
       if (opt.perm) {
         const rid = "r" + (++this.seq);
         const p = new Promise(r => this.pending.set(rid, r));
-        this.emit({ type: "permission_request", request_id: rid, agent_id: a.id, tool, summary });
+        this.emit({ type: "permission_request", request_id: rid, agent_id: a.id, tool, summary, ...(opt.questions && { questions: opt.questions }) });
         if (!(await p)) { await this.waitIdle(a); this.emit({ type: "message", agent_id: a.id, text: "Compris, je passe par une autre solution." }); continue; }
       }
       if (tool === "Task") {

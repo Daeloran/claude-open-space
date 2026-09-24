@@ -43,6 +43,16 @@ def summarize_tool(name: str, data: dict | None) -> str:
     return name
 
 
+def ask_questions(data: dict | None) -> list[dict]:
+    """Questions d'un AskUserQuestion : texte, titre, choix multiple, options (libellé, description) ; malformé → ignoré."""
+    qs = (data or {}).get("questions")
+    return [{"question": str(q.get("question") or ""), "header": str(q.get("header") or ""),
+             "multi": bool(q.get("multiSelect")),
+             "options": [{"label": str(o.get("label") or ""), "description": str(o.get("description") or "")}
+                         for o in (q.get("options") or []) if isinstance(o, dict)]}
+            for q in qs if isinstance(q, dict)] if isinstance(qs, list) else []
+
+
 def deliverable_for(name: str, data: dict | None) -> dict | None:
     data = data or {}
     if name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
