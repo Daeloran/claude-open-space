@@ -177,6 +177,9 @@ class Employee:
         self.subagents: dict[str, str] = {}   # tool_use_id du Task -> id du stagiaire
         self.tool_names: dict[str, str] = {}  # tool_use_id -> nom de l'outil
         self.intern_seq = 0
+        self.client: ClaudeSDKClient | None = None
+        self.current: Ticket | None = None  # ticket en cours de réponse
+        self.interrupted = False
         self.session_id: str | None = None  # session SDK, connue au premier message : son transcript sert au panneau
         self.tail: TranscriptTail | None = None
         self.options = ClaudeAgentOptions(
@@ -234,8 +237,10 @@ class Employee:
 
     async def _work(self) -> None:
         async with ClaudeSDKClient(options=self.options) as client:
+            self.client = client
             while True:
                 ticket = await self.tickets.get()
+                self.current, self.interrupted = ticket, False
                 await hub.emit({"type": "ticket_assigned", "ticket_id": ticket.id, "agent_id": self.id})
                 cost, tokens, ok = 0.0, 0, True
                 try:
@@ -252,9 +257,22 @@ class Employee:
                     await hub.emit({"type": "message", "agent_id": self.id, "text": f"Erreur : {exc}"})
                     raise
                 finally:
+                    self.current = None
                     await hub.emit({"type": "ticket_done", "ticket_id": ticket.id, "agent_id": self.id,
-                                    "usd": cost, "tokens": tokens, "ok": ok})
+                                    "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
+                                    **({"reason": "interrompu"} if self.interrupted else {})})
                     self.tickets.task_done()
+
+    async def interrupt(self) -> None:
+        """Échap du terminal : stoppe la réponse en cours ; la session est gardée pour le ticket suivant."""
+        if not self.current or not self.client:
+            return
+        self.interrupted = True
+        for rid in [r for r, ev in hub.requests.items() if ev.get("agent_id") == self.id]:
+            if (fut := hub.pending.get(rid)) and not fut.done():  # sa demande en attente tombe avec la réponse
+                fut.set_result((False, None))
+                await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": False})
+        await self.client.interrupt()
 
     async def translate(self, msg) -> tuple[float, int]:
         who = self.actor(msg)
@@ -492,6 +510,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 # ponytail: une ligne lue par l'observateur pendant la lecture peut manquer ou arriver en double
                 hub.chats.setdefault(aid, set()).add(ws)
                 await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": res})
+            elif kind == "interrupt":
+                aid = str(data.get("agent_id"))
+                if e := employees.get(aid):
+                    await e.interrupt()
+                else:
+                    await ws.send_json({"type": "interrupt_rejected", "agent_id": aid,
+                                        "reason": "Seuls les employés pilotés peuvent être interrompus depuis le jeu."})
             elif kind == "close_chat":
                 hub.chats.get(str(data.get("agent_id")), set()).discard(ws)
             elif kind == "permission_decision":
