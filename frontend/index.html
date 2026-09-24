@@ -501,7 +501,7 @@ function draw() {
 const fmtUsd = v => v.toLocaleString("fr-FR", { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" });
 const fmtTok = n => n >= 1000 ? (n / 1000).toFixed(1).replace(".", ",") + " k" : String(n);
 const fmtReset = iso => { const d = new Date(iso); return isNaN(d) ? "" : "reset " + d.toLocaleDateString("fr-FR", { weekday: "short" }) + " " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); };
-const clock = () => { const m = 540 + Math.floor(T / 1000); return String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); };
+const clock = () => new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 function log(text) {
   const li = document.createElement("li");
   li.innerHTML = "<time>" + clock() + "</time>";
