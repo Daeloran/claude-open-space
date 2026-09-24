@@ -81,6 +81,9 @@ def new_sid():
     return str(uuid.uuid4())
 
 
+_REAL_OPEN = io.open  # capturé avant tout monkeypatch de key_reads
+
+
 def write_session(cfg, pid, sid, cwd, entrypoint="cli", status="idle", name=None, key=True):
     d = cfg / "sessions"
     d.mkdir(parents=True, exist_ok=True)
@@ -93,7 +96,9 @@ def write_session(cfg, pid, sid, cwd, entrypoint="cli", status="idle", name=None
     (d / f"{pid}.json").write_text(json.dumps(rec))
     if key:
         k = d / f"{pid}.{uuid.uuid4().hex[:12]}.key"
-        k.write_text(KEY_SECRET)
+        # open d'origine : l'écriture de la fixture ne doit pas être prise pour une lecture par le code
+        with _REAL_OPEN(k, "w") as f:
+            f.write(KEY_SECRET)
         k.chmod(0)
     return rec
 
