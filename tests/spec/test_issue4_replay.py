@@ -14,23 +14,61 @@ Contrat public supposé :
   `{"type": "permission_resolved", "request_id": rid, "allow": bool}`, le Future est résolu
   (l'employé est débloqué) et la demande disparaît du snapshot suivant.
 - Un ticket créé via `new_ticket` apparaît dans le snapshot d'un client qui se connecte ensuite.
+  Depuis #12, le ticket porte une destination (`cwd`) : il recrute un employé dont la session
+  (`backend.app.ClaudeSDKClient`) est remplacée par une fausse classe.
 
 Pas de vrai Claude : TestClient sans bloc `with` (le lifespan qui démarre les employés ne tourne pas).
 Un portail partagé fait tourner toutes les websockets d'un test dans une seule boucle, comme en prod.
 `hub` est un singleton de module : les tests utilisent des IDs uniques et des deltas.
 """
+import asyncio
 import json
 import uuid
 
 import anyio
 import anyio.from_thread
 import pytest
+from claude_agent_sdk import ResultMessage
 from fastapi.testclient import TestClient
 
+import backend.app as app_mod
 from backend.app import app, hub
 
 ORIGIN = {"origin": "http://testserver"}
 TIMEOUT = 3
+
+
+class FakeClient:
+    """Session Claude factice : répond immédiatement à chaque prompt."""
+
+    def __init__(self, options):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def connect(self, *a, **k):
+        pass
+
+    async def disconnect(self):
+        pass
+
+    async def query(self, prompt, *a, **k):
+        pass
+
+    async def receive_response(self):
+        await asyncio.sleep(0)
+        yield ResultMessage(
+            subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+            num_turns=1, session_id="s-fake", total_cost_usd=0.0,
+            usage={"input_tokens": 1, "output_tokens": 1}, result="ok",
+        )
+
+    async def get_context_usage(self):
+        return {"totalTokens": 1000, "maxTokens": 100000}
 
 
 @pytest.fixture
@@ -104,11 +142,14 @@ def test_snapshot_suit_hello_avec_les_champs_attendus(client):
     assert isinstance(snap["pending_permissions"], list)
 
 
-def test_ticket_cree_visible_apres_reconnexion(client):
+def test_ticket_cree_visible_apres_reconnexion(monkeypatch, tmp_path, client):
+    # monkeypatch avant client : le patch reste actif jusqu'à la fermeture du portail
+    monkeypatch.setattr(app_mod, "ClaudeSDKClient", FakeClient)
+    monkeypatch.setattr(app_mod, "CLAUDE_CONFIG_DIR", tmp_path)
     title = f"ticket-{uuid.uuid4().hex}"
     with connect(client) as ws:
         handshake(ws)
-        ws.send_json({"type": "new_ticket", "title": title})
+        ws.send_json({"type": "new_ticket", "title": title, "cwd": str(tmp_path)})
         created = recv_until(ws, "ticket_created")
         assert created["ticket"]["title"] == title
     with connect(client) as ws:
@@ -116,7 +157,7 @@ def test_ticket_cree_visible_apres_reconnexion(client):
     match = [t for t in snap["tickets"] if t["title"] == title]
     assert len(match) == 1
     assert match[0]["id"] == created["ticket"]["id"]
-    assert match[0]["status"] == "queued"
+    assert match[0]["status"] in ("queued", "assigned", "done")
 
 
 def test_statuts_de_tickets_assigne_et_termine(client):

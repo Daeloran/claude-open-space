@@ -1,9 +1,12 @@
 """Tests d'intention pour #1 : contrôle de l'origine des connexions WebSocket."""
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from backend.app import app, hub
+import backend.app as app_mod
+from backend.app import app
 
 EVIL = "https://evil.example"
 
@@ -54,15 +57,29 @@ def test_allowed_origins_env_adds_origins(client, monkeypatch):
     assert_refused(client, {"origin": EVIL})
 
 
-def test_foreign_origin_new_ticket_creates_nothing(client):
-    before = hub.tickets.qsize()
+def test_foreign_origin_new_ticket_creates_nothing(client, monkeypatch, tmp_path):
+    sessions = []
+
+    class FakeClient:  # par sécurité : aucune vraie session Claude
+        def __init__(self, *a, **k):
+            sessions.append(self)
+
+    monkeypatch.setattr(app_mod, "ClaudeSDKClient", FakeClient)
+    monkeypatch.setattr(app_mod, "CLAUDE_CONFIG_DIR", tmp_path)
+    title = f"pwned-{uuid.uuid4().hex}"
     try:
         with client.websocket_connect("/ws", headers={"origin": EVIL}) as ws:
-            ws.send_json({"type": "new_ticket", "title": "pwned"})
+            ws.send_json({"type": "new_ticket", "title": title, "cwd": str(tmp_path)})
             ws.receive_json()
     except WebSocketDisconnect:
         pass
-    assert hub.tickets.qsize() == before
+
+    with client.websocket_connect("/ws", headers={"origin": "http://testserver"}) as ws:
+        while (ev := ws.receive_json())["type"] != "snapshot":
+            pass
+    assert not [t for t in ev["tickets"] if t["title"] == title]
+    assert not [a for a in ev["agents"] if a["cwd"] == str(tmp_path)]
+    assert not sessions
 
 
 def test_foreign_origin_permission_decision_is_refused(client):

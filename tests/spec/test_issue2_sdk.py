@@ -77,11 +77,11 @@ def test_permission_mode_follows_env_variable(monkeypatch):
     try:
         monkeypatch.delenv("OPENSPACE_PERMISSION_MODE", raising=False)
         importlib.reload(backend.app)
-        assert backend.app.employees[0].options.permission_mode is None
+        assert backend.app.Employee(0, "Test").options.permission_mode is None
 
         monkeypatch.setenv("OPENSPACE_PERMISSION_MODE", "default")
         importlib.reload(backend.app)
-        assert backend.app.employees[0].options.permission_mode == "default"
+        assert backend.app.Employee(0, "Test").options.permission_mode == "default"
     finally:
         vars(backend.app).update(saved)
 
@@ -137,15 +137,15 @@ def server(tmp_path):
             proc.kill()
 
 
-async def _run_ticket(port: int, title: str, on_permission=None) -> list[dict]:
-    """Envoie un ticket et renvoie les événements reçus jusqu'à ticket_done."""
+async def _run_ticket(port: int, title: str, cwd, on_permission=None) -> list[dict]:
+    """Envoie un ticket (destination : dossier `cwd`) et renvoie les événements jusqu'à ticket_done."""
     import websockets
 
     url = f"ws://127.0.0.1:{port}/ws"
     origin = f"http://127.0.0.1:{port}"
     events: list[dict] = []
     async with websockets.connect(url, additional_headers={"Origin": origin}) as ws:
-        await ws.send(json.dumps({"type": "new_ticket", "title": title}))
+        await ws.send(json.dumps({"type": "new_ticket", "title": title, "cwd": str(cwd)}))
         async for raw in ws:
             ev = json.loads(raw)
             events.append(ev)
@@ -161,15 +161,16 @@ def _types(events):
 
 
 @pytest.mark.live
-async def test_live_simple_ticket_full_sequence(server):
+async def test_live_simple_ticket_full_sequence(server, tmp_path):
     events = await asyncio.wait_for(
-        _run_ticket(server, "Liste les fichiers de ce dossier sans utiliser Bash"),
+        _run_ticket(server, "Liste les fichiers de ce dossier sans utiliser Bash", tmp_path / "chantier"),
         LIVE_TIMEOUT,
     )
     types = _types(events)
-    for expected in ("hello", "ticket_created", "ticket_assigned", "tool_use", "tool_result", "cost", "ticket_done"):
+    for expected in ("hello", "agent_hired", "ticket_created", "ticket_assigned", "tool_use", "tool_result", "cost", "ticket_done"):
         assert expected in types, f"{expected} manquant dans {types}"
 
+    assert types.index("agent_hired") < types.index("ticket_created")
     assert types.index("ticket_created") < types.index("ticket_assigned") < types.index("tool_use")
     assert types.index("tool_use") < types.index("tool_result")
     assert types[-1] == "ticket_done"
@@ -191,6 +192,7 @@ async def test_live_bash_mkdir_asks_permission_and_respects_denial(server, tmp_p
         _run_ticket(
             server,
             "Crée un dossier nommé nouveau_dossier avec la commande Bash mkdir",
+            tmp_path / "chantier",
             on_permission=deny,
         ),
         LIVE_TIMEOUT,
@@ -199,5 +201,6 @@ async def test_live_bash_mkdir_asks_permission_and_respects_denial(server, tmp_p
     assert any(r.get("tool") == "Bash" for r in requests), (
         f"aucun permission_request Bash reçu : {requests} / {types}"
     )
+    assert "agent_hired" in types and types.index("agent_hired") < types.index("ticket_created"), types
     assert types[-1] == "ticket_done", types
     assert not (tmp_path / "chantier" / "nouveau_dossier").exists()
