@@ -40,3 +40,23 @@ def test_demande_annulee_sort_de_l_etat():
 
     rid = asyncio.run(run())
     assert rid not in hub.requests and rid not in hub.pending
+
+
+def test_ticket_terminal_echoue_si_la_session_part():
+    h = Hub()
+    h.terminal["o-1"] = {"id": "t1", "busy": True}
+
+    async def run():
+        await h.emit({"type": "ticket_created", "ticket": {"id": "t1", "title": "x"}})
+        await h.emit({"type": "observed_left", "agent_id": "o-1"})
+
+    asyncio.run(run())
+    assert h.snapshot()["tickets"][0]["status"] == "done" and h.snapshot()["tickets"][0]["ok"] is False
+    assert h.terminal == {}
+
+
+def test_ticket_terminal_pas_encore_envoye_ignore():
+    h = Hub()
+    h.terminal["o-1"] = {"id": None, "busy": False}  # envoi en cours
+    asyncio.run(h.emit({"type": "observed_status", "agent_id": "o-1", "status": "busy"}))
+    assert h.terminal["o-1"] == {"id": None, "busy": False}
