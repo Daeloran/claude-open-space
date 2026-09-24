@@ -11,6 +11,7 @@ import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -36,11 +37,19 @@ from .plan_usage import PlanUsage
 WORKDIR = os.environ.get("OPENSPACE_CWD", os.getcwd())
 TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Léa,Hugo,Inès").split(",") if n.strip()]
 CONTEXT_WINDOW = int(os.environ.get("OPENSPACE_CONTEXT", "200000"))
+# Non défini : le defaultMode des réglages Claude Code de l'utilisateur s'applique
+PERMISSION_MODE = os.environ.get("OPENSPACE_PERMISSION_MODE") or None
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
 # Outils sans risque : pas de passage par le bureau du manager
-AUTO_TOOLS = ["Read", "Glob", "Grep", "LS", "TodoWrite", "WebSearch", "Task"]
+AUTO_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "WebSearch", "Agent"]
 INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
 CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+# Hosts pour lesquels on accepte l'origine http://<Host>. Liste fermée contre le DNS rebinding
+# (evil.com rebindé sur 127.0.0.1 enverrait Host = Origin = evil.com). « testserver » est le
+# Host du TestClient Starlette : inoffensif, un navigateur ne l'enverrait qu'avec un DNS local.
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
+# Tickets terminés gardés pour le snapshot : au-delà, les plus anciens sont oubliés (mémoire bornée)
+DONE_KEPT = 50
 
 
 @dataclass
@@ -50,15 +59,46 @@ class Ticket:
 
 
 class Hub:
-    """Diffusion WebSocket, file de tickets et validations en attente."""
+    """Diffusion WebSocket, file de tickets, validations en attente et état courant (pour le snapshot)."""
 
     def __init__(self) -> None:
         self.clients: set[WebSocket] = set()
         self.pending: dict[str, asyncio.Future[bool]] = {}
         self.tickets: asyncio.Queue[Ticket] = asyncio.Queue()
         self.ticket_seq = 0
+        # État dérivé des événements émis, renvoyé à chaque (re)connexion. En mémoire seulement.
+        self.board: dict[str, dict] = {}     # ticket_id -> {id, title, status, ...}, ordre de création
+        self.totals = {"usd": 0.0, "tokens": 0}
+        self.context: dict[str, float] = {}  # agent_id -> ratio
+        self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
+
+    def track(self, ev: dict) -> None:
+        kind = ev.get("type")
+        if kind == "ticket_created":
+            self.board[ev["ticket"]["id"]] = {**ev["ticket"], "status": "queued"}
+        elif kind == "ticket_assigned" and (t := self.board.get(ev["ticket_id"])):
+            t.update(status="assigned", agent_id=ev.get("agent_id"))
+        elif kind == "ticket_done" and (t := self.board.get(ev["ticket_id"])):
+            t.update(status="done", ok=ev.get("ok", True), usd=ev.get("usd", 0.0))
+            done = [k for k, v in self.board.items() if v["status"] == "done"]
+            for k in done[:-DONE_KEPT]:
+                del self.board[k]
+        elif kind == "cost":
+            self.totals["usd"] += ev.get("usd") or 0.0
+            self.totals["tokens"] += ev.get("tokens") or 0
+        elif kind == "context":
+            self.context[ev["agent_id"]] = ev["ratio"]
+        elif kind == "permission_request":
+            self.requests[ev["request_id"]] = ev
+        elif kind == "permission_resolved":
+            self.requests.pop(ev["request_id"], None)
+
+    def snapshot(self) -> dict:
+        return {"type": "snapshot", "tickets": list(self.board.values()), "totals": dict(self.totals),
+                "context": dict(self.context), "pending_permissions": list(self.requests.values())}
 
     async def emit(self, event: dict) -> None:
+        self.track(event)
         for ws in list(self.clients):
             try:
                 await ws.send_json(event)
@@ -80,7 +120,7 @@ class Employee:
         self.options = ClaudeAgentOptions(
             cwd=WORKDIR,
             allowed_tools=AUTO_TOOLS,
-            permission_mode="acceptEdits",  # les éditions passent, Bash et le reste demandent
+            permission_mode=PERMISSION_MODE,
             can_use_tool=self.can_use_tool,
         )
 
@@ -99,7 +139,9 @@ class Employee:
         try:
             allow = await fut
         finally:
+            # Décision ou annulation (session tombée) : la demande sort de l'état dans tous les cas
             hub.pending.pop(rid, None)
+            hub.requests.pop(rid, None)
         if allow:
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="Refusé par le manager. Propose une autre approche.")
@@ -127,6 +169,8 @@ class Employee:
                         cost, tokens = cost + c, tokens + t
                         if isinstance(msg, ResultMessage):
                             ok = not getattr(msg, "is_error", False)
+                    # Mesure après la réponse (couvre aussi une compaction survenue pendant le ticket)
+                    await self.refresh_context(client)
                 except Exception as exc:
                     ok = False
                     await hub.emit({"type": "message", "agent_id": self.id, "text": f"Erreur : {exc}"})
@@ -177,10 +221,17 @@ class Employee:
             tokens = ctx_tokens + get("output_tokens")
             cost = float(msg.total_cost_usd or 0)
             await hub.emit({"type": "cost", "agent_id": self.id, "usd": cost, "tokens": tokens})
-            # Approximation : l'usage cumule tous les tours du ticket
-            await hub.emit({"type": "context", "agent_id": self.id, "ratio": min(1.0, ctx_tokens / CONTEXT_WINDOW)})
             return cost, tokens
         return 0.0, 0
+
+    async def refresh_context(self, client) -> None:
+        """Fatigue = remplissage réel du contexte de la session (maxTokens : limite effective avant compaction)."""
+        try:
+            usage = await client.get_context_usage()
+            ratio = usage["totalTokens"] / (usage.get("maxTokens") or CONTEXT_WINDOW)
+        except Exception:
+            return  # mesure impossible : on garde la dernière valeur
+        await hub.emit({"type": "context", "agent_id": self.id, "ratio": min(1.0, max(0.0, ratio))})
 
 
 employees = [Employee(i, n) for i, n in enumerate(TEAM)]
@@ -209,11 +260,25 @@ async def index() -> FileResponse:
     return FileResponse(FRONTEND)
 
 
+def origin_allowed(origin: str | None, host: str | None) -> bool:
+    """Anti Cross-Site WebSocket Hijacking : seule l'interface servie par l'Open Space peut se connecter."""
+    if not origin:
+        return False
+    extra = {o.strip() for o in os.environ.get("OPENSPACE_ALLOWED_ORIGINS", "").split(",") if o.strip()}
+    if origin in extra:
+        return True
+    return bool(host) and urlsplit(f"//{host}").hostname in LOOPBACK_HOSTS and origin == f"http://{host}"
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    if not origin_allowed(ws.headers.get("origin"), ws.headers.get("host")):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     hub.clients.add(ws)
     await ws.send_json({"type": "hello", "team": [{"id": e.id, "name": e.name} for e in employees]})
+    await ws.send_json(hub.snapshot())
     await ws.send_json(plan.event)
     try:
         while True:
@@ -225,9 +290,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await hub.emit({"type": "ticket_created", "ticket": {"id": ticket.id, "title": ticket.title}})
                 await hub.tickets.put(ticket)
             elif kind == "permission_decision":
-                fut = hub.pending.get(str(data.get("request_id")))
+                rid, allow = str(data.get("request_id")), bool(data.get("allow"))
+                fut = hub.pending.get(rid)
                 if fut and not fut.done():
-                    fut.set_result(bool(data.get("allow")))
+                    fut.set_result(allow)
+                    # Ferme la popup sur les autres onglets
+                    await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": allow})
     except WebSocketDisconnect:
         pass
     finally:
