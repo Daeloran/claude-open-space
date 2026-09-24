@@ -37,7 +37,7 @@ from claude_agent_sdk import (
 
 from . import konsole
 from .events import INTERN_NAMES, ask_questions, deliverable_for, summarize_tool, todo_items
-from .observer import Observer, TranscriptTail, chat_entries, chat_history
+from .observer import Observer, TranscriptTail, chat_entries, chat_history, intern_updates, subagent_file
 from .plan_usage import PlanUsage
 from .projects import recent_projects
 
@@ -186,6 +186,7 @@ class Employee:
         self.interrupted = False
         self.session_id: str | None = None  # session SDK, connue au premier message : son transcript sert au panneau
         self.tail: TranscriptTail | None = None
+        self.intern_tails: dict[str, TranscriptTail] = {}  # stagiaire -> transcript de son sous-agent
         self.options = ClaudeAgentOptions(
             cwd=cwd,
             allowed_tools=AUTO_TOOLS,
@@ -345,7 +346,9 @@ class Employee:
         """Nouvelles entrées du transcript pour les panneaux ouverts (le début est servi par `chat_history`)."""
         if not self.follow():
             return []
-        return [{"type": "chat_entry", "agent_id": self.id, "entry": e} for e in chat_entries(self.tail.read_new())]
+        # Outils des stagiaires : déjà reçus du SDK (parent_tool_use_id), seules leurs entrées de panneau manquent
+        return ([{"type": "chat_entry", "agent_id": self.id, "entry": e} for e in chat_entries(self.tail.read_new())]
+                + intern_updates(self.tail.path, self.subagents, self.intern_tails, tools=False))
 
     async def refresh_context(self, client) -> None:
         """Fatigue = remplissage réel du contexte de la session (maxTokens : limite effective avant compaction)."""
@@ -411,15 +414,22 @@ def chat_transcript(aid: str) -> Path | str:
     if e := employees.get(aid):
         # Suivi fixé avant la lecture de l'historique : une ligne écrite entre les deux arrive en double, jamais perdue
         return e.follow() or "Pas encore de conversation : donne-lui un ticket."
+    # Stagiaire (en cours) d'un piloté ou d'une session terminal : transcript de son sous-agent
+    owners = [(e.follow(), e.subagents) for e in employees.values()]
+    owners += [(w["tail"] and w["tail"].path, w.get("interns", {})) for w in (observer.watched.values() if observer else [])]
+    for transcript, interns in owners:
+        if tuid := next((t for t, s in interns.items() if s == aid), None):
+            f = transcript and subagent_file(transcript, tuid)
+            return f if f and f.exists() else "Pas encore de journal pour ce stagiaire."
     w = observer.watched.get(aid) if observer else None
     if not w:
-        return "Employé inconnu (seules les sessions du terminal ont un historique)."
+        return "Employé inconnu ou parti (seuls les employés et stagiaires présents ont un historique)."
     return w["tail"].path if w["tail"] else "Pas encore de transcript pour cette session."
 
 
 def read_history(path: Path) -> list[dict] | str:
     try:
-        return chat_history(path)
+        return chat_history(path, sidechain="subagents" in path.parts)
     except OSError:
         return "Transcript illisible."
 
