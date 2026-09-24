@@ -57,6 +57,7 @@ CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
 # Tickets terminés gardés pour le snapshot : au-delà, les plus anciens sont oubliés (mémoire bornée)
 DONE_KEPT = 50
+MODES = ("default", "acceptEdits", "plan", "bypassPermissions", "auto")  # Maj+Tab du terminal, par employé
 ANSWER_MAX = 4000  # caractères par réponse à une question
 
 
@@ -96,6 +97,8 @@ class Hub:
             done = [k for k, v in self.board.items() if v["status"] == "done"]
             for k in done[:-DONE_KEPT]:
                 del self.board[k]
+        elif kind == "mode_changed" and (a := self.agents.get(ev["agent_id"])):
+            a["mode"] = ev["mode"]
         elif kind == "agent_hired":
             self.agents[ev["agent"]["id"]] = ev["agent"]
         elif kind == "observed_joined":  # session du terminal
@@ -195,7 +198,8 @@ class Employee:
         )
 
     def info(self) -> dict:
-        return {"id": self.id, "name": self.name, "cwd": self.cwd, "project": Path(self.cwd or ".").name}
+        return {"id": self.id, "name": self.name, "cwd": self.cwd, "project": Path(self.cwd or ".").name,
+                "mode": self.options.permission_mode}
 
     def actor(self, msg) -> str:
         parent = getattr(msg, "parent_tool_use_id", None)
@@ -211,6 +215,7 @@ class Employee:
             "type": "permission_request", "request_id": rid, "agent_id": self.id,
             "tool": tool_name, "summary": summarize_tool(tool_name, input_data),
             **({"questions": questions} if ask else {}),
+            **({"plan": str(input_data.get("plan") or "")} if tool_name == "ExitPlanMode" else {}),
         })
         try:
             allow, raw = await fut
@@ -267,6 +272,13 @@ class Employee:
                                     "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
                                     **({"reason": "interrompu"} if self.interrupted else {})})
                     self.tickets.task_done()
+
+    async def set_mode(self, mode: str) -> None:
+        """Mode de permission de la session en cours, gardé dans les options pour une reconnexion."""
+        if self.client:
+            await self.client.set_permission_mode(mode)
+        self.options.permission_mode = mode
+        await hub.emit({"type": "mode_changed", "agent_id": self.id, "mode": mode})
 
     async def interrupt(self) -> None:
         """Échap du terminal : stoppe la réponse en cours ; la session est gardée pour le ticket suivant."""
@@ -526,6 +538,14 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 # ponytail: une ligne lue par l'observateur pendant la lecture peut manquer ou arriver en double
                 hub.chats.setdefault(aid, set()).add(ws)
                 await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": res})
+            elif kind == "set_mode":
+                aid, mode = str(data.get("agent_id")), data.get("mode")
+                e = employees.get(aid)
+                if e and mode in MODES:
+                    await e.set_mode(mode)
+                else:
+                    await ws.send_json({"type": "mode_rejected", "agent_id": aid, "reason": (
+                        "Mode inconnu." if e else "Seuls les employés pilotés changent de mode depuis le jeu.")})
             elif kind == "interrupt":
                 aid = str(data.get("agent_id"))
                 if e := employees.get(aid):

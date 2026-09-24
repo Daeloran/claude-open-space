@@ -173,6 +173,9 @@ ul{list-style:none;margin:0;padding:0}
 .chat form{border-top:2px solid var(--chat-rule);padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px}
 .chat textarea{font:inherit;resize:none;height:64px;background:var(--chat-field);color:var(--chat-ink);border:2px solid var(--shadow);padding:7px 9px}
 .chat form button{align-self:end;font-family:"Pixelify Sans",ui-monospace,monospace}
+.chat .mode{grid-column:1/-1;display:flex;gap:6px;align-items:center;font-size:.85rem;color:var(--chat-soft)}
+.chat .mode[hidden]{display:none}
+.chat .mode select{font:inherit;background:var(--chat-field);color:var(--chat-ink);border:2px solid var(--shadow)}
 .chat .status{grid-column:1/-1;margin:0;font-size:.82rem;color:var(--chat-soft);min-height:1.3em}
 .chat .status.err{color:var(--berry)}
 .chat .wait{margin:0;padding:6px 12px;background:var(--berry);color:#fff;font-weight:600;font-size:.9rem}
@@ -286,6 +289,16 @@ ul{list-style:none;margin:0;padding:0}
   <form id="chatForm">
     <textarea id="chatInput" placeholder="Ta réponse… (Maj+Entrée : nouvelle ligne)" aria-label="Ta réponse"></textarea>
     <button class="primary" type="submit">Envoyer</button>
+    <label class="mode" id="chatModeBox">Mode
+      <select id="chatMode">
+        <option value="" disabled>Réglages Claude Code</option>
+        <option value="default">Demander avant d'agir</option>
+        <option value="acceptEdits">Accepter les modifications</option>
+        <option value="plan">Plan (lecture seule, plan à valider)</option>
+        <option value="auto">Auto</option>
+        <option value="bypassPermissions">Tout autoriser (dangereux)</option>
+      </select>
+    </label>
     <p class="status" id="chatStatus" role="status"></p>
   </form>
 </aside>
@@ -497,7 +510,7 @@ function seatStaff() {
   st.forEach((x, i) => { x.desk = i; x.seat = SEATS[i]; });
 }
 let internSeats = 0;
-function addAgent({ id, name, cwd, project, observed, status, waiting_for }, opts = {}) {
+function addAgent({ id, name, cwd, project, observed, status, waiting_for, mode }, opts = {}) {
   if (S.agents.has(id)) return S.agents.get(id);
   const idx = S.agents.size;
   // Stagiaires : côté nord de la table de réunion (6 places, partagées au-delà) ; employés : un bureau chacun
@@ -505,7 +518,7 @@ function addAgent({ id, name, cwd, project, observed, status, waiting_for }, opt
   const look = opts.look || (observed ? OBS_LOOKS[idx % OBS_LOOKS.length] : LOOKS[idx % LOOKS.length]);
   const a = { n: idx, id, name, cwd, project, desk: -1, look, x: 0, y: 0, dir: "up", seat, path: [], queue: [], cur: null,
     arrived: true, dwell: 0, icon: null, label: "Disponible", fatigue: 0, ticket: null, intern: !!opts.intern, parent: opts.parent || null, gone: false,
-    observed: !!observed, status: status || "idle", waitingFor: waiting_for };
+    observed: !!observed, status: status || "idle", waitingFor: waiting_for, mode };
   S.agents.set(id, a);
   if (!a.intern) seatStaff();
   const start = opts.intern || opts.hired ? SPOTS.door : a.seat;
@@ -653,7 +666,7 @@ function renderTeam() {
       }
       ul.appendChild(a.el);
     }
-    a.el.querySelector(".status").textContent = a.label + (todoCount(a) ? " · " + todoCount(a) : "");
+    a.el.querySelector(".status").textContent = a.label + (a.mode && a.mode !== "default" ? " · " + a.mode : "") + (todoCount(a) ? " · " + todoCount(a) : "");
     const b = a.el.querySelector(".bar b"); const f = Math.max(0, Math.min(1, a.fatigue));
     b.style.width = Math.round(f * 100) + "%";
     b.style.background = f > .8 ? "var(--berry)" : f > .55 ? "var(--gold)" : "var(--leaf)";
@@ -704,9 +717,10 @@ function showNextPerm() {
   const q = { Bash: "Je peux lancer cette commande ?", WebFetch: "Je peux consulter cette page ?", Write: "Je peux créer ce fichier ?", Edit: "Je peux modifier ce fichier ?", MultiEdit: "Je peux modifier ce fichier ?" };
   $("#permText").textContent = q[req.tool] || "Je peux utiliser l'outil " + req.tool + " ?";
   $("#permCmd").textContent = req.summary || req.tool;
-  const ask = !!req.questions; // AskUserQuestion : formulaire de réponses au lieu d'Autoriser / Refuser
-  $("#permCmd").hidden = ask; $("#permAsk").hidden = !ask; $("#permAsk").replaceChildren();
-  $("#allow").textContent = ask ? "Envoyer" : "Autoriser"; $("#deny").textContent = ask ? "Ignorer" : "Refuser";
+  const ask = !!req.questions, plan = typeof req.plan === "string"; // AskUserQuestion : formulaire ; ExitPlanMode : le plan
+  $("#permCmd").hidden = ask || plan; $("#permAsk").hidden = !ask && !plan; $("#permAsk").replaceChildren();
+  $("#allow").textContent = ask ? "Envoyer" : plan ? "Approuver le plan" : "Autoriser"; $("#deny").textContent = ask ? "Ignorer" : plan ? "Refuser" : "Refuser";
+  if (plan) { $("#permText").textContent = "Voici mon plan, je peux y aller ?"; $("#permAsk").append(mdNode(req.plan)); }
   if (ask) {
     $("#permText").textContent = "J'ai besoin de ton avis :";
     req.questions.forEach((q, i) => $("#permAsk").append(askField(q, i)));
@@ -889,7 +903,14 @@ document.addEventListener("keydown", e => {
 function interrupt() { if (Chat.id) { transport.send({ type: "interrupt", agent_id: Chat.id }); chatStatus("Interruption demandée…"); } }
 $("#chatStop").onclick = interrupt;
 // Bouton visible pendant qu'un piloté répond à un ticket
-setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); if (a) chatState(a); }, 400);
+setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); if (a) chatState(a);
+  $("#chatModeBox").hidden = !a || a.observed || a.intern;
+  if (a && document.activeElement !== $("#chatMode")) $("#chatMode").value = a.mode || ""; }, 400);
+$("#chatMode").onchange = e => {
+  const mode = e.target.value, a = S.agents.get(Chat.id);
+  if (mode === "bypassPermissions" && !confirm("Tout autoriser : " + (a ? a.name : "l'employé") + " lancera commandes et modifications sans rien te demander. Continuer ?")) { e.target.value = (a && a.mode) || ""; return; }
+  transport.send({ type: "set_mode", agent_id: Chat.id, mode });
+};
 // Avancement : état, ticket, fatigue et dernière liste de tâches (TodoWrite)
 const TODO_MARK = { pending: "○", in_progress: "▶", completed: "✓" };
 function todoCount(a) { return a.todos && a.todos.length ? a.todos.filter(t => t.status === "completed").length + "/" + a.todos.length + " tâches" : ""; }
@@ -940,6 +961,8 @@ function handle(ev) {
       if (Chat.id === a.id) chatWait(a);
       break;
     }
+    case "mode_changed": if (a) { a.mode = ev.mode; log(a.name + " passe en mode " + ev.mode + "."); } break;
+    case "mode_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "interrupt_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "ticket_rejected": if (Chat.id && ev.title === Chat.sent) { chatStatus("Pas envoyé : " + ev.reason, true); if (!$("#chatInput").value) $("#chatInput").value = ev.title; }
       log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
@@ -970,7 +993,7 @@ function handle(ev) {
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
-      (ev.agents || []).forEach(m => { const x = addAgent(m); if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
+      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
       S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; x.todos = (ev.todos || {})[x.id]; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });
@@ -1203,6 +1226,7 @@ const Demo = {
         this.emit(h ? { type: "chat_history", agent_id: msg.agent_id, entries: h.slice(-200) }
           : { type: "chat_history", agent_id: msg.agent_id, entries: [], error: S.agents.get(msg.agent_id)?.observed ? "Démo : pas d'historique pour cette session." : "Pas encore de conversation : donne-lui un ticket." });
       }, 250);
+      if (msg.type === "set_mode") { const to = S.agents.get(msg.agent_id); this.emit(to && !to.observed ? { type: "mode_changed", agent_id: msg.agent_id, mode: msg.mode } : { type: "mode_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés changent de mode depuis le jeu." }); }
       if (msg.type === "interrupt") { const to = S.agents.get(msg.agent_id); if (to && !to.observed && to.ticket) this.stop.add(msg.agent_id); else if (to && to.observed) this.emit({ type: "interrupt_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés peuvent être interrompus depuis le jeu." }); }
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
     };
