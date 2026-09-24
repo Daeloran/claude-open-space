@@ -58,7 +58,9 @@ def live_sessions(config_dir: Path, pid_alive=pid_alive) -> list[dict]:
             continue
         project = Path(cwd).name
         out.append({"session_id": sid, "pid": pid, "cwd": cwd, "name": str(rec.get("name") or project),
-                    "status": str(rec.get("status") or "idle"), "project": project})
+                    "status": str(rec.get("status") or "idle"), "project": project,
+                    # Seulement en attente : ce que la session attend de toi (question, permission, dialogue)
+                    **({"waiting_for": str(rec.get("waitingFor") or "")} if rec.get("status") == "waiting" else {})})
     return out
 
 
@@ -159,11 +161,24 @@ def chat_entries(records: list[dict]) -> list[dict]:
             elif b.get("type") == "tool_use" and role == "assistant" and isinstance(name := b.get("name"), str):
                 inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                 out.append({"role": role, "kind": "tool_use", "tool": name, "id": str(b.get("id")),
-                            "summary": summarize_tool(name, inp) or name, "ts": ts})
+                            "summary": summarize_tool(name, inp) or name, "ts": ts,
+                            **({"questions": _questions(inp)} if name == "AskUserQuestion" else {})})
             elif b.get("type") == "tool_result" and role == "user":
                 out.append({"role": role, "kind": "tool_result", "id": str(b.get("tool_use_id")),
                             "text": _tool_output(b.get("content")), "ok": not b.get("is_error"), "ts": ts})
     return out
+
+
+def _waiting(s: dict) -> dict:
+    return {"waiting_for": s["waiting_for"]} if "waiting_for" in s else {}
+
+
+def _questions(inp: dict) -> list[dict]:
+    """Questions d'un AskUserQuestion : texte, choix multiple, libellés des options (malformé → ignoré)."""
+    qs = inp.get("questions")
+    return [{"question": str(q.get("question") or ""), "multi": bool(q.get("multiSelect")),
+             "options": [str(o.get("label") or "") for o in (q.get("options") or []) if isinstance(o, dict)]}
+            for q in qs if isinstance(q, dict)] if isinstance(qs, list) else []
 
 
 def chat_history(path: Path, limit: int = CHAT_LIMIT, max_bytes: int = CHAT_MAX_BYTES,
@@ -208,13 +223,13 @@ class Observer:
             w = self.watched.get(aid)
             if w is None:
                 w = self.watched[aid] = {"status": s["status"], "sid": s["session_id"], "pid": s["pid"],
-                                         "tail": None, "tools": {}, "interns": {}, "intern_seq": 0,
+                                         "waiting_for": s.get("waiting_for"), "tail": None, "tools": {}, "interns": {}, "intern_seq": 0,
                                          # ponytail: réglages lus à l'arrivée seulement ; un changement en cours
                                          # de session compte au prochain démarrage de la session / de l'Open Space
                                          "window": context_window_for(s["cwd"], self.config_dir, self.window)}
                 out.append({"type": "observed_joined", "agent": {
                     "id": aid, "name": s["name"], "cwd": s["cwd"], "project": s["project"],
-                    "status": s["status"], "observed": True}})
+                    "status": s["status"], **_waiting(s), "observed": True}})
                 if path := self._transcript(s["session_id"]):
                     # Session déjà en cours : pas de rejeu de l'historique, seulement sa fatigue actuelle
                     w["tail"] = TranscriptTail(path, from_end=True)
@@ -222,9 +237,9 @@ class Observer:
                     if (msg := _last_assistant_usage(path)) and (r := self._ratio(msg, w["window"])) is not None:
                         out.append({"type": "context", "agent_id": aid, "ratio": r})
                 continue
-            if s["status"] != w["status"]:
-                w["status"] = s["status"]
-                out.append({"type": "observed_status", "agent_id": aid, "status": s["status"]})
+            if (s["status"], s.get("waiting_for")) != (w["status"], w.get("waiting_for")):
+                w["status"], w["waiting_for"] = s["status"], s.get("waiting_for")
+                out.append({"type": "observed_status", "agent_id": aid, "status": s["status"], **_waiting(s)})
             if w["tail"] is None:
                 if not (path := self._transcript(w["sid"])):
                     continue

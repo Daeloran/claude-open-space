@@ -38,6 +38,8 @@ def summarize_tool(name: str, data: dict | None) -> str:
         return f"{len(data.get('todos') or [])} tâche(s)"
     if name in ("Task", "Agent"):
         return _short(data.get("description") or data.get("prompt"))
+    if name == "AskUserQuestion" and isinstance(qs := data.get("questions"), list) and qs and isinstance(qs[0], dict):
+        return _short(qs[0].get("question"), 80)
     return name
 
 
