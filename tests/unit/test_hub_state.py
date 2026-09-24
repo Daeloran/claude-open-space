@@ -1,7 +1,7 @@
 """Tests de logique de l'état du Hub (issue #4)."""
 import asyncio
 
-from backend.app import DONE_KEPT, Hub, employees, hub
+from backend.app import DONE_KEPT, Employee, Hub, hub
 
 
 def test_tickets_termines_bornes_les_actifs_gardes():
@@ -29,7 +29,7 @@ def test_evenements_inconnus_ou_orphelins_ignores():
 
 def test_demande_annulee_sort_de_l_etat():
     async def run():
-        task = asyncio.create_task(employees[0].can_use_tool("Bash", {"command": "ls"}, None))
+        task = asyncio.create_task(Employee(0, "Léa").can_use_tool("Bash", {"command": "ls"}, None))
         while not hub.requests:
             await asyncio.sleep(0)
         rid = next(iter(hub.requests))

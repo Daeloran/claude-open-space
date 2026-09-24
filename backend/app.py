@@ -1,7 +1,8 @@
 """L'Open Space : pilote des sessions Claude Code (Agent SDK) et diffuse des événements de jeu au front.
 
-Chaque « employé » est une session ClaudeSDKClient persistante : son contexte grossit
-d'un ticket à l'autre, d'où la jauge de fatigue et les pauses café (compaction).
+Chaque « employé » est une session ClaudeSDKClient persistante, recrutée à la demande sur un projet
+(dossier) : son contexte grossit d'un ticket à l'autre, d'où la jauge de fatigue et les pauses café
+(compaction). Chaque employé a sa propre file de tickets, traités l'un après l'autre.
 """
 from __future__ import annotations
 
@@ -33,8 +34,10 @@ from claude_agent_sdk import (
 
 from .events import deliverable_for, summarize_tool
 from .plan_usage import PlanUsage
+from .projects import recent_projects
 
-WORKDIR = os.environ.get("OPENSPACE_CWD", os.getcwd())
+WORKDIR = os.environ.get("OPENSPACE_CWD")  # projet proposé en tête de liste
+# Réserve de prénoms pour les recrutements (cyclique, suffixée une fois épuisée)
 TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Léa,Hugo,Inès").split(",") if n.strip()]
 CONTEXT_WINDOW = int(os.environ.get("OPENSPACE_CONTEXT", "200000"))
 # Non défini : le defaultMode des réglages Claude Code de l'utilisateur s'applique
@@ -59,15 +62,15 @@ class Ticket:
 
 
 class Hub:
-    """Diffusion WebSocket, file de tickets, validations en attente et état courant (pour le snapshot)."""
+    """Diffusion WebSocket, validations en attente et état courant (pour le snapshot)."""
 
     def __init__(self) -> None:
         self.clients: set[WebSocket] = set()
         self.pending: dict[str, asyncio.Future[bool]] = {}
-        self.tickets: asyncio.Queue[Ticket] = asyncio.Queue()
         self.ticket_seq = 0
         # État dérivé des événements émis, renvoyé à chaque (re)connexion. En mémoire seulement.
         self.board: dict[str, dict] = {}     # ticket_id -> {id, title, status, ...}, ordre de création
+        self.agents: dict[str, dict] = {}    # agent_id -> {id, name, cwd, project}, ordre de recrutement
         self.totals = {"usd": 0.0, "tokens": 0}
         self.context: dict[str, float] = {}  # agent_id -> ratio
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
@@ -83,6 +86,8 @@ class Hub:
             done = [k for k, v in self.board.items() if v["status"] == "done"]
             for k in done[:-DONE_KEPT]:
                 del self.board[k]
+        elif kind == "agent_hired":
+            self.agents[ev["agent"]["id"]] = ev["agent"]
         elif kind == "cost":
             self.totals["usd"] += ev.get("usd") or 0.0
             self.totals["tokens"] += ev.get("tokens") or 0
@@ -94,7 +99,8 @@ class Hub:
             self.requests.pop(ev["request_id"], None)
 
     def snapshot(self) -> dict:
-        return {"type": "snapshot", "tickets": list(self.board.values()), "totals": dict(self.totals),
+        return {"type": "snapshot", "agents": list(self.agents.values()),
+                "tickets": list(self.board.values()), "totals": dict(self.totals),
                 "context": dict(self.context), "pending_permissions": list(self.requests.values())}
 
     async def emit(self, event: dict) -> None:
@@ -111,18 +117,23 @@ plan = PlanUsage(CLAUDE_CONFIG_DIR)
 
 
 class Employee:
-    def __init__(self, idx: int, name: str) -> None:
+    def __init__(self, idx: int, name: str, cwd: str | None = None) -> None:
         self.id = f"e{idx}"
         self.name = name
+        self.cwd = cwd
+        self.tickets: asyncio.Queue[Ticket] = asyncio.Queue()
         self.subagents: dict[str, str] = {}   # tool_use_id du Task -> id du stagiaire
         self.tool_names: dict[str, str] = {}  # tool_use_id -> nom de l'outil
         self.intern_seq = 0
         self.options = ClaudeAgentOptions(
-            cwd=WORKDIR,
+            cwd=cwd,
             allowed_tools=AUTO_TOOLS,
             permission_mode=PERMISSION_MODE,
             can_use_tool=self.can_use_tool,
         )
+
+    def info(self) -> dict:
+        return {"id": self.id, "name": self.name, "cwd": self.cwd, "project": Path(self.cwd or ".").name}
 
     def actor(self, msg) -> str:
         parent = getattr(msg, "parent_tool_use_id", None)
@@ -159,7 +170,7 @@ class Employee:
     async def _work(self) -> None:
         async with ClaudeSDKClient(options=self.options) as client:
             while True:
-                ticket = await hub.tickets.get()
+                ticket = await self.tickets.get()
                 await hub.emit({"type": "ticket_assigned", "ticket_id": ticket.id, "agent_id": self.id})
                 cost, tokens, ok = 0.0, 0, True
                 try:
@@ -178,7 +189,7 @@ class Employee:
                 finally:
                     await hub.emit({"type": "ticket_done", "ticket_id": ticket.id, "agent_id": self.id,
                                     "usd": cost, "tokens": tokens, "ok": ok})
-                    hub.tickets.task_done()
+                    self.tickets.task_done()
 
     async def translate(self, msg) -> tuple[float, int]:
         who = self.actor(msg)
@@ -234,7 +245,35 @@ class Employee:
         await hub.emit({"type": "context", "agent_id": self.id, "ratio": min(1.0, max(0.0, ratio))})
 
 
-employees = [Employee(i, n) for i, n in enumerate(TEAM)]
+employees: dict[str, Employee] = {}  # recrutés à la demande, jamais licenciés (hors scope #12)
+workers: set[asyncio.Task] = set()   # tâches run() des employés, annulées à l'arrêt
+
+
+def recruit_name(n: int) -> str:
+    """n-ième prénom de la réserve, suffixé (« Léa 2 ») quand la réserve est épuisée."""
+    name, lap = TEAM[n % len(TEAM)], n // len(TEAM)
+    return f"{name} {lap + 1}" if lap else name
+
+
+async def hire(cwd: str) -> Employee:
+    e = Employee(len(employees), recruit_name(len(employees)), cwd)
+    employees[e.id] = e
+    task = asyncio.create_task(e.run(), name=f"employee-{e.id}")
+    workers.add(task)
+    task.add_done_callback(workers.discard)
+    await hub.emit({"type": "agent_hired", "agent": e.info()})
+    return e
+
+
+async def route_ticket(data: dict) -> Employee | str:
+    """Employé destinataire d'un `new_ticket` (recruté si besoin), ou la raison du refus."""
+    if data.get("agent_id"):
+        return employees.get(str(data["agent_id"])) or "Employé inconnu."
+    if data.get("cwd"):
+        # abspath, pas resolve() : le chemin reste celui de la liste de projets (liens symboliques gardés)
+        path = os.path.abspath(os.path.expanduser(str(data["cwd"])))
+        return await hire(path) if os.path.isdir(path) else f"Dossier introuvable : {data['cwd']}"
+    return "Choisis un employé ou un projet pour ce ticket."
 
 
 async def refresh_plan_usage() -> None:
@@ -245,11 +284,12 @@ async def refresh_plan_usage() -> None:
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
-    tasks = [asyncio.create_task(e.run(), name=f"employee-{e.id}") for e in employees]
-    tasks.append(asyncio.create_task(refresh_plan_usage(), name="plan-usage"))
+    plan_task = asyncio.create_task(refresh_plan_usage(), name="plan-usage")
     yield
+    tasks = [plan_task, *workers]
     for t in tasks:
         t.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="L'Open Space", lifespan=lifespan)
@@ -277,18 +317,23 @@ async def ws_endpoint(ws: WebSocket) -> None:
         return
     await ws.accept()
     hub.clients.add(ws)
-    await ws.send_json({"type": "hello", "team": [{"id": e.id, "name": e.name} for e in employees]})
+    projects = await asyncio.to_thread(recent_projects, CLAUDE_CONFIG_DIR, WORKDIR)
+    await ws.send_json({"type": "hello", "team": list(hub.agents.values()), "projects": projects})
     await ws.send_json(hub.snapshot())
     await ws.send_json(plan.event)
     try:
         while True:
             data = await ws.receive_json()
             kind = data.get("type")
-            if kind == "new_ticket" and str(data.get("title", "")).strip():
+            if kind == "new_ticket" and (title := str(data.get("title", "")).strip()):
+                target = await route_ticket(data)
+                if isinstance(target, str):  # refus : seul l'émetteur est prévenu
+                    await ws.send_json({"type": "ticket_rejected", "title": title, "reason": target})
+                    continue
                 hub.ticket_seq += 1
-                ticket = Ticket(f"t{hub.ticket_seq}", str(data["title"]).strip())
+                ticket = Ticket(f"t{hub.ticket_seq}", title)
                 await hub.emit({"type": "ticket_created", "ticket": {"id": ticket.id, "title": ticket.title}})
-                await hub.tickets.put(ticket)
+                await target.tickets.put(ticket)
             elif kind == "permission_decision":
                 rid, allow = str(data.get("request_id")), bool(data.get("allow"))
                 fut = hub.pending.get(rid)
