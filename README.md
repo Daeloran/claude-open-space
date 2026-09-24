@@ -61,4 +61,3 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 - Un open space par dépôt, avec navigation entre les étages
 - Tableau de bord de direction historisé (coût par jour, par employé)
 - Recrutement : ajouter ou licencier un employé pendant la partie
-- Vérifier les noms des champs du SDK selon la version installée (`total_cost_usd`, `usage`, `parent_tool_use_id`, sous-type `compact_boundary`)
