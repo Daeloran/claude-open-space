@@ -12,6 +12,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -77,7 +78,7 @@ class Hub:
         self.totals = {"usd": 0.0, "tokens": 0}
         self.context: dict[str, float] = {}  # agent_id -> ratio
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
-        # Session terminal -> ticket tapé dans son onglet : {"id", "busy"} (id None pendant l'envoi)
+        # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
         self.terminal: dict[str, dict] = {}
 
     def track(self, ev: dict) -> None:
@@ -125,18 +126,29 @@ class Hub:
         await self.follow_terminal(event)
 
     async def follow_terminal(self, ev: dict) -> None:
-        """Ticket d'une session terminal terminé quand elle repasse idle après busy (ou quand elle part)."""
-        # ponytail: statut du registre relevé toutes les 2 s : une réponse plus rapide n'est jamais vue busy
+        """Ticket d'une session terminal terminé au premier signal : fin de réponse dans le transcript
+        (`observed_turn_end` postérieur à l'envoi), retour idle après busy, ou départ de la session."""
         kind, aid = ev.get("type"), ev.get("agent_id")
         t = self.terminal.get(aid)
-        if not t or not t["id"] or kind not in ("observed_status", "observed_left"):
+        if not t or not t["id"]:
             return
         if kind == "observed_status" and ev.get("status") == "busy":
             t["busy"] = True
-        elif kind == "observed_left" or t["busy"]:
+            return
+        # ponytail: une réponse en cours au moment de l'envoi (prompt mis en file) peut clore le ticket tôt
+        if (kind == "observed_left" or (kind == "observed_status" and t["busy"])
+                or (kind == "observed_turn_end" and _after(ev.get("at"), t.get("sent")))):
             del self.terminal[aid]
             await self.emit({"type": "ticket_done", "ticket_id": t["id"], "agent_id": aid,
                              "usd": 0.0, "tokens": 0, "ok": kind != "observed_left"})
+
+
+def _after(at, sent: datetime | None) -> bool:
+    """Horodatage du transcript postérieur à l'envoi (illisible ou absent : ligne nouvelle, on la prend)."""
+    try:
+        return sent is None or datetime.fromisoformat(str(at)) >= sent
+    except (TypeError, ValueError):
+        return True
 
 
 hub = Hub()
@@ -314,7 +326,7 @@ async def type_in_terminal(agent: dict, title: str) -> str | None:
         return "Onglet Konsole introuvable pour cette session terminal."
     if aid in hub.terminal:
         return "Cette session terminal a déjà un ticket en cours."
-    hub.terminal[aid] = {"id": None, "busy": False}  # réservé pendant l'envoi (deux onglets du jeu)
+    hub.terminal[aid] = {"id": None, "busy": False, "sent": datetime.now(timezone.utc)}  # réservé pendant l'envoi (deux onglets du jeu)
     if reason := await konsole.send_prompt(pid, title):
         del hub.terminal[aid]
     return reason

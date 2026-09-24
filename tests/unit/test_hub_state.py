@@ -60,3 +60,34 @@ def test_ticket_terminal_pas_encore_envoye_ignore():
     h.terminal["o-1"] = {"id": None, "busy": False}  # envoi en cours
     asyncio.run(h.emit({"type": "observed_status", "agent_id": "o-1", "status": "busy"}))
     assert h.terminal["o-1"] == {"id": None, "busy": False}
+
+
+def test_reponse_rapide_sans_busy_termine_le_ticket_terminal(monkeypatch):
+    import backend.app as app_mod
+    h = Hub()
+    monkeypatch.setattr(app_mod, "hub", h)
+    sent = []
+
+    async def fake_send(pid, text):
+        sent.append(text)
+
+    monkeypatch.setattr(app_mod.konsole, "send_prompt", fake_send)
+    agent = {"id": "o-1", "pid": 7, "observed": True}
+    done = []
+
+    async def run():
+        assert await app_mod.type_in_terminal(agent, "a") is None
+        h.terminal["o-1"]["id"] = "t1"
+        await h.emit({"type": "ticket_created", "ticket": {"id": "t1", "title": "a"}})
+        # fin de réponse d'avant l'envoi : ignorée
+        await h.emit({"type": "observed_turn_end", "agent_id": "o-1", "at": "2020-01-01T00:00:00Z"})
+        assert h.board["t1"]["status"] == "queued"
+        # réponse rapide : jamais vue busy, mais sa fin est dans le transcript
+        await h.emit({"type": "observed_turn_end", "agent_id": "o-1", "at": "2999-01-01T00:00:00Z"})
+        done.append(h.board["t1"]["status"])
+        await h.emit({"type": "observed_status", "agent_id": "o-1", "status": "idle"})  # pas de second ticket_done
+        assert await app_mod.type_in_terminal(agent, "b") is None  # session de nouveau disponible
+
+    asyncio.run(run())
+    assert done == ["done"] and h.board["t1"]["ok"] is True
+    assert sent == ["a", "b"]

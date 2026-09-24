@@ -96,3 +96,17 @@ def test_hub_suit_les_employes_observes():
     assert snap["agents"] == [{"id": "o-1", "name": "n", "status": "busy", "observed": True}]
     asyncio.run(h.emit({"type": "observed_left", "agent_id": "o-1"}))
     assert h.snapshot()["agents"] == [] and h.snapshot()["context"] == {}
+
+
+def test_fin_de_reponse_dans_le_transcript(tmp_path):
+    o = Observer(tmp_path, None)
+    w = {"tools": {}, "window": 200000}
+
+    def rec(stop, side=False):
+        return {"type": "assistant", "isSidechain": side, "timestamp": "2026-09-24T10:00:00.000Z",
+                "message": {"stop_reason": stop, "content": []}}
+
+    ends = lambda r: [e for e in o._events("o-1", w, r) if e["type"] == "observed_turn_end"]  # noqa: E731
+    assert ends(rec("end_turn")) == [{"type": "observed_turn_end", "agent_id": "o-1",
+                                      "at": "2026-09-24T10:00:00.000Z"}]
+    assert ends(rec("tool_use")) == [] and ends(rec(None)) == [] and ends(rec("end_turn", side=True)) == []

@@ -225,6 +225,8 @@ class Observer:
                                 "summary": summarize_tool(name, inp) or name})
             if not rec.get("isSidechain") and (r := self._ratio(msg, w["window"])) is not None:
                 out.append({"type": "context", "agent_id": aid, "ratio": r})
+            if not rec.get("isSidechain") and msg.get("stop_reason") == "end_turn":  # fin de réponse
+                out.append({"type": "observed_turn_end", "agent_id": aid, "at": str(rec.get("timestamp") or "")})
         elif rec.get("type") == "user":
             for b in blocks:
                 if b.get("type") == "tool_result":
