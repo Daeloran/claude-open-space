@@ -35,7 +35,7 @@ from claude_agent_sdk import (
 )
 
 from . import konsole
-from .events import deliverable_for, summarize_tool
+from .events import ask_questions, deliverable_for, summarize_tool
 from .observer import Observer, chat_history
 from .plan_usage import PlanUsage
 from .projects import recent_projects
@@ -57,6 +57,7 @@ CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
 # Tickets terminés gardés pour le snapshot : au-delà, les plus anciens sont oubliés (mémoire bornée)
 DONE_KEPT = 50
+ANSWER_MAX = 4000  # caractères par réponse à une question
 
 
 @dataclass
@@ -70,7 +71,7 @@ class Hub:
 
     def __init__(self) -> None:
         self.clients: set[WebSocket] = set()
-        self.pending: dict[str, asyncio.Future[bool]] = {}
+        self.pending: dict[str, asyncio.Future[tuple[bool, object]]] = {}  # -> (allow, answers bruts)
         self.ticket_seq = 0
         # État dérivé des événements émis, renvoyé à chaque (re)connexion. En mémoire seulement.
         self.board: dict[str, dict] = {}     # ticket_id -> {id, title, status, ...}, ordre de création
@@ -192,18 +193,29 @@ class Employee:
 
     async def can_use_tool(self, tool_name, input_data, context):
         rid = uuid.uuid4().hex[:8]
-        fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        fut: asyncio.Future[tuple[bool, object]] = asyncio.get_running_loop().create_future()
         hub.pending[rid] = fut
+        ask = tool_name == "AskUserQuestion"
+        questions = ask_questions(input_data) if ask else []
         await hub.emit({
             "type": "permission_request", "request_id": rid, "agent_id": self.id,
             "tool": tool_name, "summary": summarize_tool(tool_name, input_data),
+            **({"questions": questions} if ask else {}),
         })
         try:
-            allow = await fut
+            allow, raw = await fut
         finally:
             # Décision ou annulation (session tombée) : la demande sort de l'état dans tous les cas
             hub.pending.pop(rid, None)
             hub.requests.pop(rid, None)
+        if ask and allow:  # réponses du navigateur : questions connues, texte seulement, longueur bornée
+            known = {q["question"] for q in questions}
+            answers = {q: a[:ANSWER_MAX] for q, a in (raw.items() if isinstance(raw, dict) else [])
+                       if q in known and isinstance(a, str)}
+            return PermissionResultAllow(updated_input={**input_data, "answers": answers})
+        if ask:
+            return PermissionResultDeny(message="Le manager n'a pas répondu à ta question : décide toi-même "
+                                                "ou demande autrement.")
         if allow:
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="Refusé par le manager. Propose une autre approche.")
@@ -455,7 +467,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 rid, allow = str(data.get("request_id")), bool(data.get("allow"))
                 fut = hub.pending.get(rid)
                 if fut and not fut.done():
-                    fut.set_result(allow)
+                    fut.set_result((allow, data.get("answers")))
                     # Ferme la popup sur les autres onglets
                     await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": allow})
     except WebSocketDisconnect:
