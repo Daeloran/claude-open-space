@@ -176,7 +176,7 @@ ul{list-style:none;margin:0;padding:0}
 .chat .status{grid-column:1/-1;margin:0;font-size:.82rem;color:var(--chat-soft);min-height:1.3em}
 .chat .status.err{color:var(--berry)}
 .chat .wait{margin:0;padding:6px 12px;background:var(--berry);color:#fff;font-weight:600;font-size:.9rem}
-.chat .wait[hidden]{display:none}
+.chat .wait[hidden],.chat form[hidden]{display:none}
 .chat .state{margin:0;font-size:.85rem;color:var(--chat-soft);border-bottom:2px solid var(--chat-rule);padding:4px 12px}
 .chat .state summary{cursor:pointer}
 .chat .state ul{list-style:none;margin:4px 0 2px;padding:0;max-height:8em;overflow-y:auto}
@@ -646,7 +646,7 @@ function renderTeam() {
       if (a.observed) {
         const p = document.createElement("span"); p.className = "proj term"; p.textContent = "terminal"; p.title = "Session Claude Code du terminal : les tickets sont tapés dans son onglet Konsole"; a.el.querySelector(".name").append(p);
       }
-      if (!a.intern) {
+      {
         a.el.className = "talk"; a.el.tabIndex = 0; a.el.setAttribute("role", "button"); a.el.title = "Discuter avec " + a.name;
         a.el.onclick = () => openChat(a);
         a.el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChat(a); } };
@@ -832,18 +832,19 @@ function chatWait(a) {
 }
 function chatStatus(text, err) { $("#chatStatus").textContent = text; $("#chatStatus").classList.toggle("err", !!err); }
 function openChat(a) {
-  if (!a || a.intern || a.gone || a.leaving) return;
-  if (Chat.id === a.id) { $("#chatInput").focus(); return; }
+  if (!a || a.gone || a.leaving) return;
+  if (Chat.id === a.id) { if (!a.intern) $("#chatInput").focus(); return; }
   if (Chat.id) closeChat(true);
   Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null;
   $("#chatName").textContent = a.name; $("#chatProj").textContent = a.project || ""; $("#chatProj").title = a.cwd || "";
   portrait($("#chatPortrait"), a.look);
   chatStatus(""); chatWait(a); chatNote("Chargement de l'historique…");
-  $("#chat").hidden = false;
+  $("#chat").hidden = false; $("#chatForm").hidden = !!a.intern; // stagiaire : lecture seule, il reste à son travail
+  transport.send({ type: "open_chat", agent_id: a.id });
+  if (a.intern) return;
   // Il vient au bureau du manager et y reste tant que le panneau est ouvert
   a.chatting = true; Chat.act = { spot: "manager", icon: null, hold: true, label: "Discute avec toi" };
   a.queue = [Chat.act];
-  transport.send({ type: "open_chat", agent_id: a.id });
   $("#chatInput").focus({ preventScroll: true });
   log(a.name + " vient discuter à ton bureau.");
 }
@@ -852,7 +853,7 @@ function closeChat(silent) {
   const a = S.agents.get(Chat.id);
   transport.send({ type: "close_chat", agent_id: Chat.id });
   if (a) { a.chatting = false; a.queue = a.queue.filter(x => x !== Chat.act); }
-  Chat.act.released = true; // retour à son bureau
+  if (Chat.act) Chat.act.released = true; // retour à son bureau
   Chat.id = Chat.act = null; $("#chat").hidden = true; chatLog.replaceChildren();
   if (!silent && Chat.back && Chat.back.focus) Chat.back.focus({ preventScroll: true });
 }
@@ -903,7 +904,7 @@ function chatState(a) {
 function agentAt(e) {
   const r = cv.getBoundingClientRect(); if (!r.width) return null;
   const x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
-  return [...S.agents.values()].filter(a => !a.intern && !a.hidden && !a.gone && Math.abs(a.x - x) <= 5 && y >= a.y - 16 && y <= a.y + 2)
+  return [...S.agents.values()].filter(a => !a.hidden && !a.gone && Math.abs(a.x - x) <= 5 && y >= a.y - 16 && y <= a.y + 2)
     .sort((p, q) => q.y - p.y)[0] || null;
 }
 cv.addEventListener("click", e => openChat(agentAt(e)));
@@ -992,6 +993,7 @@ function handle(ev) {
       if (!a) break;
       enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Rentre chez lui", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); } });
       const p = S.agents.get(a.parent); if (p) p.waiting = false;
+      if (Chat.id === a.id) chatStatus("Terminé : " + a.name + " a rendu son rapport.");
       log(a.name + " rend son rapport et s'en va."); break;
     }
     case "chat_history":
@@ -1089,8 +1091,15 @@ const Demo = {
         const sid = a.id + "-s" + (++this.seq);
         this.emit({ type: "subagent_spawned", parent_id: a.id, agent: { id: sid, name: INTERN_NAMES[internSeq % INTERN_NAMES.length] }, task: summary });
         const it = S.agents.get(sid);
+        this.note(sid, { role: "user", kind: "text", text: summary, ts: now() });
         await this.waitIdle(a); await this.waitIdle(it);
-        for (const [tl, sm] of [["Read", this.pick(this.files)], ["Grep", this.pick(this.greps)]]) { this.emit({ type: "tool_use", agent_id: sid, tool: tl, summary: sm }); await this.waitIdle(it); }
+        for (const [tl, sm] of [["Read", this.pick(this.files)], ["Grep", this.pick(this.greps)]]) {
+          const tu = "toolu_demo" + (++this.seq);
+          this.emit({ type: "tool_use", agent_id: sid, tool: tl, summary: sm }); this.note(sid, { role: "assistant", kind: "tool_use", tool: tl, summary: sm, id: tu, ts: now() });
+          await this.waitIdle(it); this.note(sid, { role: "user", kind: "tool_result", id: tu, text: "(sortie fictive de la démo)", ok: true, ts: now() });
+        }
+        this.note(sid, { role: "assistant", kind: "text", text: "Rapport : rien de bloquant dans *" + summary + "*.", ts: now() });
+        await this.sleep(1500); // le temps d'ouvrir son panneau
         this.emit({ type: "subagent_done", agent_id: sid });
         continue;
       }

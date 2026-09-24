@@ -141,13 +141,14 @@ def _tool_output(content) -> str:
     return text
 
 
-def chat_entries(records: list[dict]) -> list[dict]:
-    """Enregistrements de transcript → entrées du panneau de discussion (conversation principale seulement)."""
+def chat_entries(records: list[dict], sidechain: bool = False) -> list[dict]:
+    """Enregistrements de transcript → entrées du panneau de discussion (conversation principale seulement,
+    sauf `sidechain` : transcript d'un sous-agent, dont tout est « sidechain »)."""
     out = []
     for rec in records:
         msg = rec.get("message") if isinstance(rec, dict) else None
         if (not isinstance(msg, dict) or rec.get("type") not in ("user", "assistant")
-                or rec.get("isMeta") or rec.get("isSidechain")):
+                or rec.get("isMeta") or (rec.get("isSidechain") and not sidechain)):
             continue
         role, ts, content = rec["type"], rec.get("timestamp"), msg.get("content")
         blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
@@ -173,8 +174,42 @@ def _waiting(s: dict) -> dict:
     return {"waiting_for": s["waiting_for"]} if "waiting_for" in s else {}
 
 
+def subagent_file(transcript: Path, tool_use_id: str) -> Path | None:
+    """Transcript du sous-agent lancé par `tool_use_id` : `<session>/subagents/agent-*.jsonl`, repéré par son .meta.json."""
+    for meta in (transcript.parent / transcript.stem / "subagents").glob("agent-*.meta.json"):
+        try:
+            if json.loads(meta.read_text(encoding="utf-8")).get("toolUseId") == tool_use_id:
+                return meta.with_name(meta.name.removesuffix(".meta.json") + ".jsonl")
+        except (OSError, ValueError, AttributeError):
+            continue
+    return None
+
+
+def intern_updates(transcript: Path | None, interns: dict[str, str], tails: dict, tools: bool) -> list[dict]:
+    """Activité des stagiaires (tool_use_id -> id) : entrées de panneau et, si `tools`, leurs outils (animation).
+    Fichier du sous-agent lu depuis le début dès qu'il apparaît ; suivi abandonné quand le stagiaire part."""
+    out: list[dict] = []
+    for tuid, sid in interns.items():
+        if sid not in tails:
+            if not transcript or not (f := subagent_file(transcript, tuid)):
+                continue
+            tails[sid] = TranscriptTail(f)
+        recs = tails[sid].read_new()
+        out.extend({"type": "chat_entry", "agent_id": sid, "entry": e} for e in chat_entries(recs, sidechain=True))
+        for rec in recs if tools else []:
+            content = (rec.get("message") or {}).get("content") if rec.get("type") == "assistant" else None
+            for b in content if isinstance(content, list) else []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and isinstance(name := b.get("name"), str):
+                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                    out.append({"type": "tool_use", "agent_id": sid, "tool": name,
+                                "summary": summarize_tool(name, inp) or name})
+    for sid in set(tails) - set(interns.values()):
+        del tails[sid]
+    return out
+
+
 def chat_history(path: Path, limit: int = CHAT_LIMIT, max_bytes: int = CHAT_MAX_BYTES,
-                 chunk: int = 64 * 1024) -> list[dict]:
+                 chunk: int = 64 * 1024, sidechain: bool = False) -> list[dict]:
     """`limit` dernières entrées, lues depuis la fin (fenêtre doublée jusqu'à assez d'entrées). OSError propagée."""
     with open(path, "rb") as f:
         size = f.seek(0, os.SEEK_END)
@@ -184,7 +219,7 @@ def chat_history(path: Path, limit: int = CHAT_LIMIT, max_bytes: int = CHAT_MAX_
             lines = f.read(n).split(b"\n")
             if n < size:
                 lines = lines[1:]  # première ligne coupée
-            entries = chat_entries([r for r in map(_parse, lines) if r is not None])
+            entries = chat_entries([r for r in map(_parse, lines) if r is not None], sidechain)
             # ponytail: plafond 4 Mo, une session aux énormes sorties d'outils peut montrer moins de 200 entrées
             if len(entries) >= limit or n >= size or n >= max_bytes:
                 return entries[-limit:]
@@ -240,6 +275,7 @@ class Observer:
                 out.extend(self._events(aid, w, rec))
                 # Contenu de conversation : l'émetteur (Hub) ne le transmet qu'aux panneaux ouverts, jamais à tous
                 out.extend({"type": "chat_entry", "agent_id": aid, "entry": e} for e in chat_entries([rec]))
+            out.extend(intern_updates(w["tail"].path, w["interns"], w.setdefault("intern_tails", {}), tools=True))
         return out
 
     def _gone(self, w: dict) -> bool:
