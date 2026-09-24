@@ -45,6 +45,8 @@ INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
 # (evil.com rebindé sur 127.0.0.1 enverrait Host = Origin = evil.com). « testserver » est le
 # Host du TestClient Starlette : inoffensif, un navigateur ne l'enverrait qu'avec un DNS local.
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
+# Tickets terminés gardés pour le snapshot : au-delà, les plus anciens sont oubliés (mémoire bornée)
+DONE_KEPT = 50
 
 
 @dataclass
@@ -54,15 +56,46 @@ class Ticket:
 
 
 class Hub:
-    """Diffusion WebSocket, file de tickets et validations en attente."""
+    """Diffusion WebSocket, file de tickets, validations en attente et état courant (pour le snapshot)."""
 
     def __init__(self) -> None:
         self.clients: set[WebSocket] = set()
         self.pending: dict[str, asyncio.Future[bool]] = {}
         self.tickets: asyncio.Queue[Ticket] = asyncio.Queue()
         self.ticket_seq = 0
+        # État dérivé des événements émis, renvoyé à chaque (re)connexion. En mémoire seulement.
+        self.board: dict[str, dict] = {}     # ticket_id -> {id, title, status, ...}, ordre de création
+        self.totals = {"usd": 0.0, "tokens": 0}
+        self.context: dict[str, float] = {}  # agent_id -> ratio
+        self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
+
+    def track(self, ev: dict) -> None:
+        kind = ev.get("type")
+        if kind == "ticket_created":
+            self.board[ev["ticket"]["id"]] = {**ev["ticket"], "status": "queued"}
+        elif kind == "ticket_assigned" and (t := self.board.get(ev["ticket_id"])):
+            t.update(status="assigned", agent_id=ev.get("agent_id"))
+        elif kind == "ticket_done" and (t := self.board.get(ev["ticket_id"])):
+            t.update(status="done", ok=ev.get("ok", True), usd=ev.get("usd", 0.0))
+            done = [k for k, v in self.board.items() if v["status"] == "done"]
+            for k in done[:-DONE_KEPT]:
+                del self.board[k]
+        elif kind == "cost":
+            self.totals["usd"] += ev.get("usd") or 0.0
+            self.totals["tokens"] += ev.get("tokens") or 0
+        elif kind == "context":
+            self.context[ev["agent_id"]] = ev["ratio"]
+        elif kind == "permission_request":
+            self.requests[ev["request_id"]] = ev
+        elif kind == "permission_resolved":
+            self.requests.pop(ev["request_id"], None)
+
+    def snapshot(self) -> dict:
+        return {"type": "snapshot", "tickets": list(self.board.values()), "totals": dict(self.totals),
+                "context": dict(self.context), "pending_permissions": list(self.requests.values())}
 
     async def emit(self, event: dict) -> None:
+        self.track(event)
         for ws in list(self.clients):
             try:
                 await ws.send_json(event)
@@ -102,7 +135,9 @@ class Employee:
         try:
             allow = await fut
         finally:
+            # Décision ou annulation (session tombée) : la demande sort de l'état dans tous les cas
             hub.pending.pop(rid, None)
+            hub.requests.pop(rid, None)
         if allow:
             return PermissionResultAllow(updated_input=input_data)
         return PermissionResultDeny(message="Refusé par le manager. Propose une autre approche.")
@@ -229,6 +264,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     hub.clients.add(ws)
     await ws.send_json({"type": "hello", "team": [{"id": e.id, "name": e.name} for e in employees]})
+    await ws.send_json(hub.snapshot())
     try:
         while True:
             data = await ws.receive_json()
@@ -239,9 +275,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await hub.emit({"type": "ticket_created", "ticket": {"id": ticket.id, "title": ticket.title}})
                 await hub.tickets.put(ticket)
             elif kind == "permission_decision":
-                fut = hub.pending.get(str(data.get("request_id")))
+                rid, allow = str(data.get("request_id")), bool(data.get("allow"))
+                fut = hub.pending.get(rid)
                 if fut and not fut.done():
-                    fut.set_result(bool(data.get("allow")))
+                    fut.set_result(allow)
+                    # Ferme la popup sur les autres onglets
+                    await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": allow})
     except WebSocketDisconnect:
         pass
     finally:

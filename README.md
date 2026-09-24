@@ -49,7 +49,9 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 
 ### Événements backend → front
 
-`hello`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`
+`hello`, `snapshot`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`
+
+À la connexion, `snapshot` suit `hello` avec l'état courant (tickets, totaux coût/tokens, fatigue par employé, validations en attente) : recharger l'onglet ou en ouvrir un second ne perd rien. `permission_resolved` ferme la validation sur tous les onglets.
 
 ### Messages front → backend
 

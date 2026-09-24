@@ -71,6 +71,9 @@ def test_requirements_pin_minimum_sdk_version():
 def test_permission_mode_follows_env_variable(monkeypatch):
     import backend.app
 
+    # reload remplace hub, app, employees… : on restaure les objets d'origine,
+    # que d'autres tests ont importés par référence
+    saved = dict(vars(backend.app))
     try:
         monkeypatch.delenv("OPENSPACE_PERMISSION_MODE", raising=False)
         importlib.reload(backend.app)
@@ -80,8 +83,7 @@ def test_permission_mode_follows_env_variable(monkeypatch):
         importlib.reload(backend.app)
         assert backend.app.employees[0].options.permission_mode == "default"
     finally:
-        monkeypatch.delenv("OPENSPACE_PERMISSION_MODE", raising=False)
-        importlib.reload(backend.app)
+        vars(backend.app).update(saved)
 
 
 def test_readme_no_longer_lists_sdk_field_check():
