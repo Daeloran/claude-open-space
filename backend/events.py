@@ -53,6 +53,13 @@ def ask_questions(data: dict | None) -> list[dict]:
             for q in qs if isinstance(q, dict)] if isinstance(qs, list) else []
 
 
+def todo_items(data: dict | None) -> list[dict]:
+    """Liste d'un TodoWrite : `content` et `status` des éléments valides seulement."""
+    todos = (data or {}).get("todos")
+    return [{"content": t["content"], "status": t["status"]} for t in (todos if isinstance(todos, list) else [])
+            if isinstance(t, dict) and isinstance(t.get("content"), str) and isinstance(t.get("status"), str)]
+
+
 def deliverable_for(name: str, data: dict | None) -> dict | None:
     data = data or {}
     if name in ("Edit", "Write", "MultiEdit", "NotebookEdit"):

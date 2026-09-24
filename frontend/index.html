@@ -177,10 +177,14 @@ ul{list-style:none;margin:0;padding:0}
 .chat .status.err{color:var(--berry)}
 .chat .wait{margin:0;padding:6px 12px;background:var(--berry);color:#fff;font-weight:600;font-size:.9rem}
 .chat .wait[hidden]{display:none}
+.chat .state{margin:0;font-size:.85rem;color:var(--chat-soft);border-bottom:2px solid var(--chat-rule);padding:4px 12px}
+.chat .state summary{cursor:pointer}
+.chat .state ul{list-style:none;margin:4px 0 2px;padding:0;max-height:8em;overflow-y:auto}
+.chat .state li.in_progress{color:var(--chat-ink);font-weight:600}.chat .state li.completed{text-decoration:line-through}
 .tool.ask .q{color:var(--chat-ink);font-size:14px;padding:2px 8px 2px 22px}
 .tool.ask .q p{margin:.3em 0;font-weight:600}.tool.ask .q ul{margin:0 0 .4em;padding-left:1.2em}
 /* Colonne de lecture ~900px centrée ; la barre de défilement reste au bord */
-.chat header,.chat .wait,.chat-log,.chat form{padding-inline:max(12px,calc((100% - 900px) / 2))}
+.chat header,.chat .wait,.chat .state,.chat-log,.chat form{padding-inline:max(12px,calc((100% - 900px) / 2))}
 .toggle{display:flex;align-items:center;gap:6px;font-size:.9rem;margin-top:8px;color:var(--ink-soft)}
 </style>
 </head>
@@ -277,6 +281,7 @@ ul{list-style:none;margin:0;padding:0}
     <button type="button" id="chatClose" title="Fermer (Échap)">Fermer</button>
   </header>
   <p class="wait" id="chatWait" role="status" hidden></p>
+  <details class="state" id="chatState" open><summary id="chatSum"></summary><ul id="chatTodos"></ul></details>
   <div class="chat-log" id="chatLog" aria-live="polite"></div>
   <form id="chatForm">
     <textarea id="chatInput" placeholder="Ta réponse… (Maj+Entrée : nouvelle ligne)" aria-label="Ta réponse"></textarea>
@@ -648,7 +653,7 @@ function renderTeam() {
       }
       ul.appendChild(a.el);
     }
-    a.el.querySelector(".status").textContent = a.label;
+    a.el.querySelector(".status").textContent = a.label + (todoCount(a) ? " · " + todoCount(a) : "");
     const b = a.el.querySelector(".bar b"); const f = Math.max(0, Math.min(1, a.fatigue));
     b.style.width = Math.round(f * 100) + "%";
     b.style.background = f > .8 ? "var(--berry)" : f > .55 ? "var(--gold)" : "var(--leaf)";
@@ -883,7 +888,18 @@ document.addEventListener("keydown", e => {
 function interrupt() { if (Chat.id) { transport.send({ type: "interrupt", agent_id: Chat.id }); chatStatus("Interruption demandée…"); } }
 $("#chatStop").onclick = interrupt;
 // Bouton visible pendant qu'un piloté répond à un ticket
-setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); }, 400);
+setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); if (a) chatState(a); }, 400);
+// Avancement : état, ticket, fatigue et dernière liste de tâches (TodoWrite)
+const TODO_MARK = { pending: "○", in_progress: "▶", completed: "✓" };
+function todoCount(a) { return a.todos && a.todos.length ? a.todos.filter(t => t.status === "completed").length + "/" + a.todos.length + " tâches" : ""; }
+function chatState(a) {
+  const sum = [a.label, a.ticket && "ticket « " + a.ticket.title + " »", "fatigue " + Math.round((a.fatigue || 0) * 100) + " %", todoCount(a)].filter(Boolean).join(" · ");
+  if ($("#chatSum").textContent !== sum) $("#chatSum").textContent = sum;
+  const key = JSON.stringify(a.todos || []);
+  if ($("#chatTodos").dataset.key === key) return;
+  $("#chatTodos").dataset.key = key;
+  $("#chatTodos").replaceChildren(...(a.todos || []).map(t => { const li = document.createElement("li"); li.className = t.status; li.textContent = (TODO_MARK[t.status] || "·") + " " + t.content; return li; }));
+}
 function agentAt(e) {
   const r = cv.getBoundingClientRect(); if (!r.width) return null;
   const x = (e.clientX - r.left) * W / r.width, y = (e.clientY - r.top) * H / r.height;
@@ -954,7 +970,7 @@ function handle(ev) {
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
       (ev.agents || []).forEach(m => { const x = addAgent(m); if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
-      S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; });
+      S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; x.todos = (ev.todos || {})[x.id]; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });
       const done = ev.tickets.filter(t => t.status === "done" && t.ok !== false);
@@ -987,6 +1003,7 @@ function handle(ev) {
     case "chat_entry": if (ev.agent_id === Chat.id && ev.entry) chatAppend([ev.entry]); break;
     case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); break;
     case "context": if (a) a.fatigue = ev.ratio; break;
+    case "todos": if (a) a.todos = ev.todos; break;
     case "compaction": {
       if (!a) break; S.coffee++;
       enqueue(a, { spot: "coffee", icon: "coffee", dwell: 3500, label: "Pause café", onDone: () => { a.fatigue = Math.min(a.fatigue, .25); } });
@@ -1054,6 +1071,8 @@ const Demo = {
     this.emit({ type: "ticket_assigned", ticket_id: t.id, agent_id: a.id });
     const now = () => new Date().toISOString();
     this.note(a.id, { role: "user", kind: "text", text: t.title, ts: now() });
+    const plan = ["Comprendre la demande", "Modifier le code", "Lancer les tests"], todo = k => this.emit({ type: "todos", agent_id: a.id, todos: plan.map((c, i) => ({ content: c, status: i < k ? "completed" : i === k ? "in_progress" : "pending" })) });
+    todo(0); setTimeout(() => todo(1), 2500); setTimeout(() => todo(2), 6000);
     let usd = 0, tokens = 0;
     this.stop.delete(a.id);
     for (const [tool, summary, opt = {}] of this.script()) {
@@ -1090,6 +1109,7 @@ const Demo = {
     }
     await this.sleep(600);
     if (this.stop.delete(a.id)) { this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd, tokens, ok: false, reason: "interrompu" }); a.busy = false; return; }
+    todo(3);
     this.note(a.id, { role: "assistant", kind: "text", text: "C'est fait pour *« " + t.title + " »*. En démo rien n'est réel ; avec le backend, ma vraie réponse s'affiche ici.", ts: now() });
     this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd, tokens, ok: true });
     if (this.ctx[a.id] > .8) { this.ctx[a.id] = .2; this.emit({ type: "compaction", agent_id: a.id }); await this.waitIdle(a); }
