@@ -31,9 +31,11 @@ OPENSPACE_CWD=/chemin/du/repo/a/travailler uvicorn backend.app:app --host 127.0.
 
 Puis ouvre http://127.0.0.1:8000. Ajoute `?demo` à l'URL pour jouer avec des événements simulés, sans appeler Claude.
 
-Variables utiles : `OPENSPACE_TEAM` (noms séparés par des virgules), `OPENSPACE_CONTEXT` (taille de fenêtre utilisée pour la jauge de fatigue).
+Variables utiles : `OPENSPACE_TEAM` (noms séparés par des virgules), `OPENSPACE_CONTEXT` (taille de fenêtre utilisée pour la jauge de fatigue), `OPENSPACE_PERMISSION_MODE` (optionnel, force un mode de permission ; par défaut les employés suivent tes réglages Claude Code : mode, règles allow, hooks, CLAUDE.md ; seules les permissions manquantes arrivent à ton bureau).
 
 Le serveur écoute uniquement en local : les employés peuvent exécuter des commandes sur ta machine.
+
+Le WebSocket `/ws` refuse toute connexion dont l'en-tête `Origin` n'est pas l'interface elle-même (`http://127.0.0.1:<port>`, `http://localhost:<port>` ou `http://[::1]:<port>`, même host et port que la requête) : une autre page ouverte dans ton navigateur ne peut ni créer de tickets ni valider de commandes. Derrière un proxy ou sur un autre port, ajoute les origines voulues via `OPENSPACE_ALLOWED_ORIGINS` (séparées par des virgules, ex. `OPENSPACE_ALLOWED_ORIGINS=http://localhost:3000`).
 
 ## Architecture
 
@@ -63,4 +65,3 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 - Un open space par dépôt, avec navigation entre les étages
 - Tableau de bord de direction historisé (coût par jour, par employé)
 - Recrutement : ajouter ou licencier un employé pendant la partie
-- Vérifier les noms des champs du SDK selon la version installée (`total_cost_usd`, `usage`, `parent_tool_use_id`, sous-type `compact_boundary`)
