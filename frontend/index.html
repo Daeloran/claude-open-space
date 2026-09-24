@@ -170,7 +170,12 @@ ul{list-style:none;margin:0;padding:0}
 .tool .st.ok{color:var(--leaf)}.tool .st.ko{color:var(--berry)}
 .tool pre{margin:4px 0 2px 18px;max-height:280px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 .chat .note{color:var(--chat-soft);text-align:center;margin:auto 12px}
-.chat form{border-top:2px solid var(--chat-rule);padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px}
+.chat .cmds{position:absolute;bottom:100%;left:0;right:0;max-height:40vh;overflow-y:auto;margin:0 12px;padding:0;list-style:none;background:var(--chat-field);border:2px solid var(--shadow);z-index:2}
+.chat .cmds[hidden]{display:none}
+.chat .cmds button{display:block;width:100%;text-align:left;font:inherit;font-size:13px;background:none;border:0;color:var(--chat-ink);padding:4px 8px;cursor:pointer}
+.chat .cmds button:hover,.chat .cmds button:focus{background:var(--chat-rule)}
+.chat .cmds small{color:var(--chat-soft)}
+.chat form{position:relative;border-top:2px solid var(--chat-rule);padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px}
 .chat textarea{font:inherit;resize:none;height:64px;background:var(--chat-field);color:var(--chat-ink);border:2px solid var(--shadow);padding:7px 9px}
 .chat form button{align-self:end;font-family:"Pixelify Sans",ui-monospace,monospace}
 .chat .mode{grid-column:1/-1;display:flex;gap:6px;align-items:center;font-size:.85rem;color:var(--chat-soft)}
@@ -288,6 +293,7 @@ ul{list-style:none;margin:0;padding:0}
   <details class="state" id="chatState" open><summary id="chatSum"></summary><ul id="chatTodos"></ul></details>
   <div class="chat-log" id="chatLog" aria-live="polite"></div>
   <form id="chatForm">
+    <ul class="cmds" id="chatCmds" hidden></ul>
     <textarea id="chatInput" placeholder="Ta réponse… (Maj+Entrée : nouvelle ligne)" aria-label="Ta réponse"></textarea>
     <button class="primary" type="submit">Envoyer</button>
     <label class="mode" id="chatModeBox">Mode
@@ -879,8 +885,23 @@ function sendReply() {
   const a = S.agents.get(Chat.id);
   Chat.sent = v; chatStatus(a && a.observed ? "Envoi dans son terminal…" : "Envoi…");
   transport.send({ type: "new_ticket", title: v, agent_id: Chat.id });
-  $("#chatInput").value = "";
+  $("#chatInput").value = ""; $("#chatCmds").hidden = true;
 }
+// Commandes slash de la session d'un piloté : suggestions pendant la saisie de « /nom »
+function cmdSuggest() {
+  const a = Chat.id && S.agents.get(Chat.id), m = /^\/(\S*)$/.exec($("#chatInput").value), ul = $("#chatCmds");
+  const hits = a && a.commands && m ? a.commands.filter(c => c.name.startsWith(m[1])).slice(0, 12) : [];
+  ul.hidden = !hits.length;
+  ul.replaceChildren(...hits.map(c => {
+    const li = document.createElement("li"), b = document.createElement("button"), d = document.createElement("small");
+    b.type = "button"; d.textContent = " " + (c.argumentHint ? c.argumentHint + " — " : "") + c.description.slice(0, 90);
+    b.append("/" + c.name, d);
+    b.onclick = () => { $("#chatInput").value = "/" + c.name + " "; ul.hidden = true; $("#chatInput").focus(); };
+    li.append(b); return li;
+  }));
+}
+$("#chatInput").addEventListener("input", cmdSuggest);
+$("#chatInput").addEventListener("keydown", e => { if (e.key === "Tab" && !$("#chatCmds").hidden) { e.preventDefault(); $("#chatCmds button").click(); } });
 $("#chatForm").addEventListener("submit", e => { e.preventDefault(); sendReply(); });
 $("#chatInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendReply(); } });
 $("#chatClose").onclick = () => closeChat();
@@ -1009,7 +1030,7 @@ function handle(ev) {
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
-      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
+      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; x.commands = (ev.commands || {})[x.id]; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
       S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; x.todos = (ev.todos || {})[x.id]; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });
@@ -1045,6 +1066,8 @@ function handle(ev) {
     case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); break;
     case "context": if (a) a.fatigue = ev.ratio; break;
     case "todos": if (a) a.todos = ev.todos; break;
+    case "commands": if (a) a.commands = ev.commands; break;
+    case "chat_cleared": if (a && Chat.id === a.id) chatNote("Nouvelle conversation : l'historique repart de zéro."); if (a) log(a.name + " repart sur une nouvelle conversation."); break;
     case "compaction": {
       if (!a) break; S.coffee++;
       enqueue(a, { spot: "coffee", icon: "coffee", dwell: 3500, label: "Pause café", onDone: () => { a.fatigue = Math.min(a.fatigue, .25); } });
@@ -1090,6 +1113,8 @@ const Demo = {
   hire(cwd, resumed) {
     const n = this.hired++, name = this.names[n % 3] + (n >= 3 ? " " + (Math.floor(n / 3) + 1) : "");
     this.emit({ type: "agent_hired", agent: { id: "e" + n, name, cwd, project: cwd.split("/").pop(), ...(resumed && { resumed }) } });
+    this.emit({ type: "commands", agent_id: "e" + n, commands: [["clear", "", "Nouvelle conversation"], ["compact", "[consignes]", "Résume la conversation pour libérer du contexte"],
+      ["context", "", "Occupation du contexte"], ["model", "[modèle]", "Change de modèle"], ["code-review", "[PR]", "Revue de code"]].map(([name, argumentHint, description]) => ({ name, argumentHint, description })) });
     return "e" + n;
   },
   script() {
@@ -1111,6 +1136,10 @@ const Demo = {
     t.status = "cours";
     this.emit({ type: "ticket_assigned", ticket_id: t.id, agent_id: a.id });
     const now = () => new Date().toISOString();
+    if (/^\/(clear|model)\b/.test(t.title)) { // commandes gérées par le backend, sans prompt
+      if (t.title.startsWith("/clear")) { this.history[a.id] = []; this.emit({ type: "chat_cleared", agent_id: a.id }); this.ctx[a.id] = 0; this.emit({ type: "context", agent_id: a.id, ratio: 0 }); }
+      await this.sleep(400); this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: a.id, usd: 0, tokens: 0, ok: true }); a.busy = false; return;
+    }
     this.note(a.id, { role: "user", kind: "text", text: t.title, ts: now() });
     const plan = ["Comprendre la demande", "Modifier le code", "Lancer les tests"], todo = k => this.emit({ type: "todos", agent_id: a.id, todos: plan.map((c, i) => ({ content: c, status: i < k ? "completed" : i === k ? "in_progress" : "pending" })) });
     todo(0); setTimeout(() => todo(1), 2500); setTimeout(() => todo(2), 6000);
