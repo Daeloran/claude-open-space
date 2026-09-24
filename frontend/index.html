@@ -45,7 +45,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:"Pixelify Sans",
 .layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"stage side" "log side";gap:14px;margin-top:14px;align-items:start}
 .layout>.stage{grid-area:stage}.layout>aside{grid-area:side}.layout>.logpanel{grid-area:log;margin:0}
 @media (max-width:880px){.layout{grid-template-columns:1fr;grid-template-areas:"stage" "side" "log"}}
-@media (max-width:560px){.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%}.stat{min-width:0;padding:4px 6px}.stat span{font-size:.72rem}.stat b{font-size:1rem}.mode{grid-column:1/-1;justify-self:start}.brand h1{font-size:1.4rem}}
+@media (max-width:560px){.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));width:100%}.stat{min-width:0;padding:4px 6px}.stat span{font-size:.72rem}.stat b{font-size:1rem}.mode{grid-column:1/-1;justify-self:start}.brand h1{font-size:1.4rem}}
 .stage{background:var(--frame);border:3px solid var(--shadow);box-shadow:inset 0 0 0 3px var(--frame-hi),0 4px 0 var(--shadow);padding:7px}
 #office{display:block;width:100%;height:auto;aspect-ratio:240/176;image-rendering:pixelated;image-rendering:crisp-edges;background:#c8925e}
 .legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 12px;margin:8px 4px 2px;color:var(--on-frame);font-size:.85rem;opacity:.9}
@@ -112,6 +112,8 @@ ul{list-style:none;margin:0;padding:0}
       <div class="stat"><span>Heure</span><b id="sClock">09:00</b></div>
       <div class="stat"><span>Dépensé</span><b id="sCost">0,00 $</b></div>
       <div class="stat"><span>Tokens</span><b id="sTokens">0</b></div>
+      <div class="stat" id="s5hBox"><span>5 h</span><b id="s5h">—</b></div>
+      <div class="stat" id="s7dBox"><span>Semaine</span><b id="s7d">—</b></div>
       <div class="stat"><span>Tickets livrés</span><b id="sDone">0</b></div>
       <span class="mode" id="mode">Démo</span>
     </div>
@@ -357,7 +359,7 @@ const INTERN_LOOKS = [
   { hair: "#3a2416", shirt: "#e8b23a", pants: "#3b4a6b", skin: "#8a5a3b" },
 ];
 const MANAGER = { hair: "#4a2e1c", shirt: "#f4efe4", pants: "#2f3542", skin: "#e6b58f" };
-const S = { agents: new Map(), tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], ticketCost: 0 };
+const S = { plan: {}, agents: new Map(), tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], ticketCost: 0 };
 let T = 0;
 
 function addAgent({ id, name }, opts = {}) {
@@ -458,6 +460,7 @@ function draw() {
 /* ---------- Interface ---------- */
 const fmtUsd = v => v.toLocaleString("fr-FR", { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" });
 const fmtTok = n => n >= 1000 ? (n / 1000).toFixed(1).replace(".", ",") + " k" : String(n);
+const fmtReset = iso => { const d = new Date(iso); return isNaN(d) ? "" : "reset " + d.toLocaleDateString("fr-FR", { weekday: "short" }) + " " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); };
 const clock = () => { const m = 540 + Math.floor(T / 1000); return String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0"); };
 function log(text) {
   const li = document.createElement("li");
@@ -504,6 +507,11 @@ function renderStats() {
   $("#sCost").textContent = fmtUsd(S.cost);
   $("#sTokens").textContent = fmtTok(S.tokens);
   $("#sDone").textContent = S.done;
+  [["five_hour", "#s5h"], ["seven_day", "#s7d"]].forEach(([k, id]) => {
+    const w = S.plan[k];
+    $(id).textContent = w ? Math.round(w.utilization) + " %" : "—";
+    $(id + "Box").title = w && w.resets_at ? fmtReset(w.resets_at) : "";
+  });
   $("#kAvg").textContent = S.done ? fmtUsd(S.ticketCost / S.done) : "–";
   $("#kDeny").textContent = S.denied + " / " + S.perms;
   $("#kDeliv").textContent = S.deliv.length;
@@ -584,6 +592,7 @@ function handle(ev) {
       enqueue(a, { spot: "coffee", icon: "coffee", dwell: 3500, label: "Pause café", onDone: () => { a.fatigue = Math.min(a.fatigue, .25); } });
       log(a.name + " fait une pause café : contexte compacté."); break;
     }
+    case "plan_usage": S.plan = ev; break;
     case "cost": S.cost += ev.usd || 0; S.tokens += ev.tokens || 0; break;
     case "ticket_done": {
       const t = S.tickets.find(x => x.id === ev.ticket_id);
@@ -665,6 +674,8 @@ const Demo = {
   },
   start() {
     ["Léa", "Hugo", "Inès"].forEach((n, i) => addAgent({ id: "e" + i, name: n }));
+    const inHours = h => new Date(Date.now() + h * 3600e3).toISOString();
+    this.emit({ type: "plan_usage", five_hour: { utilization: 23, resets_at: inHours(3.2) }, seven_day: { utilization: 41, resets_at: inHours(90) } });
     transport.send = msg => {
       if (msg.type === "new_ticket") this.newTicket(msg.title);
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
