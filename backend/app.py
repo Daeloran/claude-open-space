@@ -36,7 +36,7 @@ from claude_agent_sdk import (
 
 from . import konsole
 from .events import deliverable_for, summarize_tool
-from .observer import Observer
+from .observer import Observer, chat_history
 from .plan_usage import PlanUsage
 from .projects import recent_projects
 
@@ -80,6 +80,8 @@ class Hub:
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
         # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
         self.terminal: dict[str, dict] = {}
+        # agent_id -> clients dont le panneau de discussion est ouvert sur cet employé
+        self.chats: dict[str, set[WebSocket]] = {}
 
     def track(self, ev: dict) -> None:
         kind = ev.get("type")
@@ -99,6 +101,7 @@ class Hub:
         elif kind == "observed_left":
             self.agents.pop(ev["agent_id"], None)
             self.context.pop(ev["agent_id"], None)
+            self.chats.pop(ev["agent_id"], None)
         elif kind == "observed_status" and (a := self.agents.get(ev["agent_id"])):
             a["status"] = ev["status"]
         elif kind == "cost":
@@ -117,6 +120,11 @@ class Hub:
                 "context": dict(self.context), "pending_permissions": list(self.requests.values())}
 
     async def emit(self, event: dict) -> None:
+        if event.get("type") == "chat_entry":  # contenu de conversation : panneaux abonnés seulement, hors snapshot
+            for ws in list(self.chats.get(event.get("agent_id"), ())):
+                with contextlib.suppress(Exception):
+                    await ws.send_json(event)
+            return
         self.track(event)
         for ws in list(self.clients):
             try:
@@ -332,6 +340,21 @@ async def type_in_terminal(agent: dict, title: str) -> str | None:
     return reason
 
 
+def chat_transcript(aid: str) -> Path | str:
+    """Transcript de la session terminal `aid`, ou la raison de l'échec."""
+    w = observer.watched.get(aid) if observer else None
+    if not w:
+        return "Employé inconnu (seules les sessions du terminal ont un historique)."
+    return w["tail"].path if w["tail"] else "Pas encore de transcript pour cette session."
+
+
+def read_history(path: Path) -> list[dict] | str:
+    try:
+        return chat_history(path)
+    except OSError:
+        return "Transcript illisible."
+
+
 async def refresh_plan_usage() -> None:
     while True:
         await hub.emit(await plan.get())
@@ -410,6 +433,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await hub.emit({"type": "ticket_assigned", "ticket_id": ticket.id, "agent_id": target["id"]})
                 else:
                     await target.tickets.put(ticket)
+            elif kind == "open_chat":
+                aid = str(data.get("agent_id"))
+                res = chat_transcript(aid)
+                if isinstance(res, Path):
+                    res = await asyncio.to_thread(read_history, res)
+                if isinstance(res, str):
+                    await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": [], "error": res})
+                    continue
+                # ponytail: une ligne lue par l'observateur pendant la lecture peut manquer ou arriver en double
+                hub.chats.setdefault(aid, set()).add(ws)
+                await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": res})
+            elif kind == "close_chat":
+                hub.chats.get(str(data.get("agent_id")), set()).discard(ws)
             elif kind == "permission_decision":
                 rid, allow = str(data.get("request_id")), bool(data.get("allow"))
                 fut = hub.pending.get(rid)
@@ -421,3 +457,5 @@ async def ws_endpoint(ws: WebSocket) -> None:
         pass
     finally:
         hub.clients.discard(ws)
+        for subs in hub.chats.values():
+            subs.discard(ws)

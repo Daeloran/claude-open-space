@@ -123,7 +123,7 @@ def test_api_sensible_desactivee_donne_une_raison_explicite(monkeypatch):
         if method.endswith("foregroundProcessId"):
             return "(42,)"
         sent.append(args)
-        raise RuntimeError("GDBus.Error:org.freedesktop.DBus.Error.Failed: Security sensitive DBus API is disabled in the settings.")
+        raise RuntimeError("Erreur : GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: L'API « D-Bus » de confidentialité pour la sécurité est désactivée dans la configuration.")
 
     monkeypatch.setattr(k, "dbus_call", fake)
     reason = asyncio.run(k.send_prompt(42, "salut"))

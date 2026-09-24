@@ -16,6 +16,10 @@ from .events import summarize_tool
 
 TAIL_BYTES = 256 * 1024  # fin du transcript lue pour la fatigue initiale
 BIG_WINDOW = 1_000_000
+CHAT_LIMIT = 200          # entrées renvoyées à l'ouverture du panneau de discussion
+CHAT_MAX_BYTES = 4 << 20  # fin de transcript lue au plus pour cet historique
+TOOL_OUTPUT_MAX = 2000    # caractères d'une sortie d'outil transmis au panneau
+REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 
 
 def pid_alive(pid: int) -> bool:
@@ -125,6 +129,61 @@ def _last_assistant_usage(path: Path) -> dict | None:
     return None
 
 
+def _tool_output(content) -> str:
+    if isinstance(content, list):
+        content = "\n".join((b.get("text") or "") if b.get("type") == "text" else f"[{b.get('type')}]"
+                            for b in content if isinstance(b, dict))
+    text = content if isinstance(content, str) else ""
+    if len(text) > TOOL_OUTPUT_MAX:
+        text = text[:TOOL_OUTPUT_MAX] + f"\n… (sortie tronquée, {len(text)} caractères au total)"
+    return text
+
+
+def chat_entries(records: list[dict]) -> list[dict]:
+    """Enregistrements de transcript → entrées du panneau de discussion (conversation principale seulement)."""
+    out = []
+    for rec in records:
+        msg = rec.get("message") if isinstance(rec, dict) else None
+        if (not isinstance(msg, dict) or rec.get("type") not in ("user", "assistant")
+                or rec.get("isMeta") or rec.get("isSidechain")):
+            continue
+        role, ts, content = rec["type"], rec.get("timestamp"), msg.get("content")
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+        for b in blocks if isinstance(blocks, list) else []:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text" and isinstance(b.get("text"), str):
+                text = (REMINDER.sub("", b["text"]) if role == "user" else b["text"]).strip()
+                if text:
+                    out.append({"role": role, "kind": "text", "text": text, "ts": ts})
+            elif b.get("type") == "tool_use" and role == "assistant" and isinstance(name := b.get("name"), str):
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                out.append({"role": role, "kind": "tool_use", "tool": name, "id": str(b.get("id")),
+                            "summary": summarize_tool(name, inp) or name, "ts": ts})
+            elif b.get("type") == "tool_result" and role == "user":
+                out.append({"role": role, "kind": "tool_result", "id": str(b.get("tool_use_id")),
+                            "text": _tool_output(b.get("content")), "ok": not b.get("is_error"), "ts": ts})
+    return out
+
+
+def chat_history(path: Path, limit: int = CHAT_LIMIT, max_bytes: int = CHAT_MAX_BYTES,
+                 chunk: int = 64 * 1024) -> list[dict]:
+    """`limit` dernières entrées, lues depuis la fin (fenêtre doublée jusqu'à assez d'entrées). OSError propagée."""
+    with open(path, "rb") as f:
+        size = f.seek(0, os.SEEK_END)
+        n = min(chunk, size, max_bytes)
+        while True:
+            f.seek(size - n)
+            lines = f.read(n).split(b"\n")
+            if n < size:
+                lines = lines[1:]  # première ligne coupée
+            entries = chat_entries([r for r in map(_parse, lines) if r is not None])
+            # ponytail: plafond 4 Mo, une session aux énormes sorties d'outils peut montrer moins de 200 entrées
+            if len(entries) >= limit or n >= size or n >= max_bytes:
+                return entries[-limit:]
+            n = min(n * 2, size, max_bytes)
+
+
 class Observer:
     """`poll()` = une passe : registre + transcripts → événements de jeu via `emit`."""
 
@@ -172,6 +231,8 @@ class Observer:
                 w["tail"] = TranscriptTail(path)  # transcript créé après l'arrivée : tout est nouveau
             for rec in w["tail"].read_new():
                 out.extend(self._events(aid, w, rec))
+                # Contenu de conversation : l'émetteur (Hub) ne le transmet qu'aux panneaux ouverts, jamais à tous
+                out.extend({"type": "chat_entry", "agent_id": aid, "entry": e} for e in chat_entries([rec]))
         return out
 
     def _gone(self, w: dict) -> bool:

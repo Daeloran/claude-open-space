@@ -108,7 +108,7 @@ async def send_prompt(pid: int, text: str) -> str | None:
         await dbus_call(*loc, SEND, body)
         await dbus_call(*loc, SEND, "\r")
     except Exception as exc:  # gdbus absent, D-Bus en panne, timeout, onglet fermé…
-        if "Security sensitive DBus API is disabled" in str(exc):
+        if "DBus.Error.AccessDenied" in str(exc):  # API sensible désactivée (message traduit selon la langue)
             return ("Konsole refuse l'envoi : active « Enable the security sensitive parts of the DBus API » "
                     "(Configurer Konsole → Général).")
         return f"Konsole injoignable par D-Bus ({type(exc).__name__})."
