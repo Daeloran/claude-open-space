@@ -17,6 +17,9 @@ def _short_path(path: str) -> str:
     return "/".join(parts[-2:]) if len(parts) > 2 else path
 
 
+INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]
+
+
 def summarize_tool(name: str, data: dict | None) -> str:
     data = data or {}
     if name in FILE_TOOLS:
