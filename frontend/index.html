@@ -69,6 +69,11 @@ input,button,select{font:inherit}
 input[type=text],select{flex:1;min-width:0;background:#fff8e6;color:var(--ink);border:2px solid var(--shadow);padding:6px 8px}
 form.new select,form.new .row{flex:1 1 100%}
 form.new [hidden]{display:none}
+#ticketDlg{width:min(900px,95vw);background:var(--panel);color:var(--ink);border:3px solid var(--shadow);box-shadow:inset 0 0 0 3px var(--gold),0 6px 0 var(--shadow);padding:14px}
+#ticketDlg::backdrop{background:rgba(0,0,0,.45)}
+#ticketDlg textarea{flex:1 1 100%;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif;height:55vh;resize:vertical;background:#fff8e6;color:var(--ink);border:2px solid var(--shadow);padding:8px 10px}
+#ticketDlg .actions{flex:1 1 100%;display:flex;justify-content:flex-end;gap:8px}
+.tickets li>span:first-child{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;white-space:pre-line}
 button:disabled{opacity:.5;cursor:not-allowed}
 button{cursor:pointer;border:2px solid var(--shadow);padding:6px 12px;background:var(--panel-2);color:var(--ink);box-shadow:0 3px 0 var(--shadow)}
 button:active{transform:translateY(2px);box-shadow:0 1px 0 var(--shadow)}
@@ -232,14 +237,18 @@ ul{list-style:none;margin:0;padding:0}
     <aside>
       <div class="panel">
         <h2>Tickets</h2>
+        <button class="primary" type="button" id="newTicketBtn">Nouveau ticket</button>
+        <dialog id="ticketDlg" aria-labelledby="ticketDlgTitle">
+        <h2 id="ticketDlgTitle">Nouveau ticket</h2>
         <form class="new" id="newTicket">
           <select id="dest" aria-label="Destination du ticket"></select>
           <select id="project" aria-label="Projet du nouvel employé" hidden></select>
           <select id="session" aria-label="Conversation à reprendre" hidden></select>
           <input type="text" id="cwd" class="row" placeholder="/chemin/du/projet" aria-label="Dossier du projet" autocomplete="off" hidden>
-          <input type="text" id="ticketTitle" placeholder="Décris la demande…" aria-label="Nouvelle demande" autocomplete="off">
-          <button class="primary" type="submit" id="send">Créer</button>
+          <textarea id="ticketTitle" placeholder="Décris la demande… (Ctrl+Entrée : créer)" aria-label="Nouvelle demande"></textarea>
+          <div class="actions"><button type="button" id="ticketCancel">Annuler</button><button class="primary" type="submit" id="send">Créer</button></div>
         </form>
+        </dialog>
         <ul class="tickets" id="tickets" style="margin-top:8px"></ul>
         <label class="toggle" id="autoWrap"><input type="checkbox" id="auto" checked> Des clients envoient des demandes</label>
       </div>
@@ -644,7 +653,7 @@ function renderTickets() {
   if (!visible.length) { ul.innerHTML = '<li class="empty">Aucune demande. Crée un ticket pour mettre l\'équipe au travail.</li>'; return; }
   visible.forEach(t => {
     const li = document.createElement("li");
-    const span = document.createElement("span"); span.textContent = t.title;
+    const span = document.createElement("span"); span.textContent = t.title; span.title = t.title;
     const tag = document.createElement("span"); tag.className = "tag " + t.status;
     tag.textContent = t.status === "attente" ? "En attente" : t.status === "cours" ? (t.agent ? t.agent.name : "En cours") : t.status === "fait" ? "Livré" : "Échec";
     li.append(span, tag); ul.appendChild(li);
@@ -925,7 +934,7 @@ $("#chatGrip").addEventListener("keydown", e => {
 });
 // Échap : dans le champ vide d'un piloté au travail, interrompt (comme le terminal) ; sinon ferme le panneau
 document.addEventListener("keydown", e => {
-  if (e.key !== "Escape" || !Chat.id || !$("#perm").hidden) return;
+  if (e.key !== "Escape" || !Chat.id || !$("#perm").hidden || $("#ticketDlg").open) return;
   if (e.target === $("#chatInput") && !$("#chatInput").value && !$("#chatStop").hidden) interrupt(); else closeChat();
 });
 function interrupt() { if (Chat.id) { transport.send({ type: "interrupt", agent_id: Chat.id }); chatStatus("Interruption demandée…"); } }
@@ -1006,6 +1015,7 @@ function handle(ev) {
     case "mode_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "interrupt_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "ticket_rejected": if (Chat.id && ev.title === Chat.sent) { chatStatus("Pas envoyé : " + ev.reason, true); if (!$("#chatInput").value) $("#chatInput").value = ev.title; }
+      else if (ev.title && !$("#ticketTitle").value) $("#ticketTitle").value = ev.title; // brouillon rendu : rouvrir « Nouveau ticket »
       log("Ticket refusé" + (ev.title ? " « " + ev.title + " »" : "") + " : " + ev.reason); break;
     case "ticket_created": if (Chat.id && ev.ticket.title === Chat.sent) chatStatus(S.agents.get(Chat.id)?.observed ? "Tapé dans son terminal." : "Ticket confié, il s'y met après ses tickets en cours.");
       S.tickets.push({ id: ev.ticket.id, title: ev.ticket.title, status: "attente" }); log("Nouvelle demande : " + ev.ticket.title); renderTickets(); break;
@@ -1331,8 +1341,12 @@ $("#newTicket").addEventListener("submit", e => {
   if (dest === "resume") { S.resuming = { sid: $("#session").value, title: v }; transport.send({ type: "resume", session_id: S.resuming.sid }); }
   else transport.send(dest === "new" ? { type: "new_ticket", title: v, cwd } : { type: "new_ticket", title: v, agent_id: dest });
   if (dest === "resume") $("#session").replaceChildren(); // liste rafraîchie au prochain choix
-  $("#ticketTitle").value = ""; $("#cwd").value = ""; checkDest();
+  $("#ticketTitle").value = ""; $("#cwd").value = ""; checkDest(); $("#ticketDlg").close();
 });
+// Fenêtre de rédaction : Échap / Annuler ferme sans envoyer, le brouillon reste
+$("#newTicketBtn").onclick = () => { $("#ticketDlg").showModal(); $("#ticketTitle").focus(); };
+$("#ticketCancel").onclick = () => $("#ticketDlg").close();
+$("#ticketTitle").addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $("#newTicket").requestSubmit(); } });
 
 if (live) startLive(); else Demo.start();
 renderTickets(); renderStats(); renderDest();
