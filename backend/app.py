@@ -36,7 +36,7 @@ from claude_agent_sdk import (
 )
 
 from . import konsole
-from .events import INTERN_NAMES, ask_questions, deliverable_for, summarize_tool, todo_items
+from .events import INTERN_NAMES, ask_questions, deliverable_for, is_pr_command, summarize_tool, todo_items
 from .observer import Observer, TranscriptTail, chat_entries, chat_history, intern_updates, subagent_file
 from .plan_usage import PlanUsage
 from . import observer as observer_mod
@@ -176,6 +176,7 @@ class Hub:
             return
         # ponytail: une réponse en cours au moment de l'envoi (prompt mis en file) peut clore le ticket tôt
         if (kind == "observed_left" or (kind == "observed_status" and t["busy"] and ev.get("status") == "idle")
+                or (kind == "tool_result" and ev.get("pr") and ev.get("ok"))  # PR/MR créée
                 or (kind == "observed_turn_end" and _after(ev.get("at"), t.get("sent")))):
             del self.terminal[aid]
             await self.emit({"type": "ticket_done", "ticket_id": t["id"], "agent_id": aid,
@@ -203,6 +204,8 @@ class Employee:
         self.tickets: asyncio.Queue[Ticket] = asyncio.Queue()
         self.subagents: dict[str, str] = {}   # tool_use_id du Task -> id du stagiaire
         self.tool_names: dict[str, str] = {}  # tool_use_id -> nom de l'outil
+        self.prs: set[str] = set()  # tool_use_id des commandes qui ouvrent une PR/MR
+        self.delivered = False  # ticket en cours déjà livré (PR/MR créée) : pas de second ticket_done
         self.intern_seq = 0
         self.client: ClaudeSDKClient | None = None
         self.current: Ticket | None = None  # ticket en cours de réponse
@@ -275,7 +278,7 @@ class Employee:
             self.commands, clear = None, False
             while not clear:
                 ticket = await self.tickets.get()
-                self.current, self.interrupted = ticket, False
+                self.current, self.interrupted, self.delivered = ticket, False, False
                 await hub.emit({"type": "ticket_assigned", "ticket_id": ticket.id, "agent_id": self.id})
                 if self.commands is None:  # liste de la session, lue une fois connectée
                     await self.load_commands(client)
@@ -304,9 +307,10 @@ class Employee:
                     raise
                 finally:
                     self.current = None
-                    await hub.emit({"type": "ticket_done", "ticket_id": ticket.id, "agent_id": self.id,
-                                    "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
-                                    **({"reason": "interrompu"} if self.interrupted else {})})
+                    if not self.delivered:
+                        await hub.emit({"type": "ticket_done", "ticket_id": ticket.id, "agent_id": self.id,
+                                        "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
+                                        **({"reason": "interrompu"} if self.interrupted else {})})
                     self.tickets.task_done()
 
     async def forget_session(self) -> None:
@@ -360,6 +364,8 @@ class Employee:
                     await hub.emit({"type": "message", "agent_id": who, "text": block.text.strip()[:280]})
                 elif isinstance(block, ToolUseBlock):
                     self.tool_names[block.id] = block.name
+                    if who == self.id and is_pr_command(block.name, block.input):
+                        self.prs.add(block.id)
                     summary = summarize_tool(block.name, block.input)
                     await hub.emit({"type": "tool_use", "agent_id": who, "tool": block.name, "summary": summary})
                     if block.name in ("Task", "Agent"):
@@ -378,8 +384,15 @@ class Employee:
             for block in content:
                 if isinstance(block, ToolResultBlock):
                     tool = self.tool_names.pop(block.tool_use_id, "?")
-                    await hub.emit({"type": "tool_result", "agent_id": who, "tool": tool,
-                                    "ok": not bool(getattr(block, "is_error", False))})
+                    ok = not bool(getattr(block, "is_error", False))
+                    await hub.emit({"type": "tool_result", "agent_id": who, "tool": tool, "ok": ok})
+                    if block.tool_use_id in self.prs:
+                        self.prs.discard(block.tool_use_id)
+                        # ponytail: coût du ticket inconnu avant la fin du tour → usd 0 (compté dans les totaux, pas dans le coût moyen)
+                        if ok and self.current and not self.delivered:  # PR/MR créée : ticket livré sans attendre la fin du tour
+                            self.delivered = True
+                            await hub.emit({"type": "ticket_done", "ticket_id": self.current.id, "agent_id": self.id,
+                                            "usd": 0.0, "tokens": 0, "ok": True})
                     if sid := self.subagents.pop(block.tool_use_id, None):
                         await hub.emit({"type": "subagent_done", "agent_id": sid})
         elif isinstance(msg, RateLimitEvent):

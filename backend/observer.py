@@ -12,7 +12,7 @@ import os
 import re
 from pathlib import Path
 
-from .events import INTERN_NAMES, ask_questions, summarize_tool, todo_items
+from .events import INTERN_NAMES, ask_questions, is_pr_command, summarize_tool, todo_items
 
 TAIL_BYTES = 256 * 1024  # fin du transcript lue pour la fatigue initiale
 BIG_WINDOW = 1_000_000
@@ -250,7 +250,7 @@ class Observer:
             w = self.watched.get(aid)
             if w is None:
                 w = self.watched[aid] = {"status": s["status"], "sid": s["session_id"], "pid": s["pid"],
-                                         "waiting_for": s.get("waiting_for"), "tail": None, "tools": {}, "interns": {}, "intern_seq": 0,
+                                         "waiting_for": s.get("waiting_for"), "tail": None, "tools": {}, "prs": set(), "interns": {}, "intern_seq": 0,
                                          # ponytail: réglages lus à l'arrivée seulement ; un changement en cours
                                          # de session compte au prochain démarrage de la session / de l'Open Space
                                          "window": context_window_for(s["cwd"], self.config_dir, self.window)}
@@ -324,6 +324,8 @@ class Observer:
             for b in blocks:
                 if b.get("type") == "tool_use" and isinstance(name := b.get("name"), str):
                     w["tools"][str(b.get("id"))] = name
+                    if is_pr_command(name, b.get("input") if isinstance(b.get("input"), dict) else {}):
+                        w["prs"].add(str(b.get("id")))
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     out.append({"type": "tool_use", "agent_id": aid, "tool": name,
                                 "summary": summarize_tool(name, inp) or name})
@@ -343,7 +345,9 @@ class Observer:
                 if b.get("type") == "tool_result":
                     out.append({"type": "tool_result", "agent_id": aid,
                                 "tool": w["tools"].pop(str(b.get("tool_use_id")), "?"),
-                                "ok": not b.get("is_error")})
+                                "ok": not b.get("is_error"),
+                                **({"pr": True} if str(b.get("tool_use_id")) in w["prs"] else {})})
+                    w["prs"].discard(str(b.get("tool_use_id")))
                     if sid := w["interns"].pop(str(b.get("tool_use_id")), None):
                         out.append({"type": "subagent_done", "agent_id": sid})
         return out
