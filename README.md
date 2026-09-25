@@ -32,6 +32,23 @@ uvicorn backend.app:app --host 127.0.0.1 --port 8000
 
 Puis ouvre http://127.0.0.1:8000. Ajoute `?demo` à l'URL pour jouer avec des événements simulés, sans appeler Claude.
 
+### Lancer au démarrage
+
+Service systemd utilisateur : l'Open Space démarre à ta connexion et redémarre s'il plante, sans terminal ouvert.
+
+```bash
+mkdir -p ~/.config/systemd/user
+ln -s "$PWD/openspace.service" ~/.config/systemd/user/openspace.service
+systemctl --user daemon-reload
+systemctl --user enable --now openspace
+```
+
+Le fichier suppose le clone dans `~/Projets/claude-open-space` (`WorkingDirectory`) et le venv dans `.venv` ; adapte-le sinon. Il lance uvicorn via `zsh -ic` pour que les employés aient le `PATH` de ton terminal (`~/.zshrc`). Écoute sur 127.0.0.1 seulement : l'app n'a pas d'authentification.
+
+- Logs : `journalctl --user -u openspace -f`
+- Après un `git pull` : `systemctl --user restart openspace`
+- Arrêter : `systemctl --user disable --now openspace`
+
 L'open space démarre vide. À chaque ticket, tu choisis sa destination : un employé existant (le ticket suit dans sa session, après ses tickets en cours) ou « Nouvel employé… » sur un projet. Les projets proposés sont les dossiers récents de tes sessions Claude Code (champ `cwd` des transcripts `$CLAUDE_CONFIG_DIR/projects/*/*.jsonl`, défaut `~/.claude`), ou un autre dossier saisi à la main.
 
 Variables utiles : `OPENSPACE_CWD` (projet proposé en tête de liste), `OPENSPACE_TEAM` (prénoms des recrues, séparés par des virgules ; réutilisés avec un numéro une fois épuisés, défaut `Léa,Hugo,Inès`), `OPENSPACE_CONTEXT` (taille de fenêtre de repli pour la jauge de fatigue, si la session ne la fournit pas), `OPENSPACE_PERMISSION_MODE` (optionnel, force un mode de permission ; par défaut les employés suivent tes réglages Claude Code : mode, règles allow, hooks, CLAUDE.md ; seules les permissions manquantes arrivent à ton bureau).
