@@ -1,6 +1,7 @@
 """Traduction des appels d'outils Claude Code en libellés lisibles pour le jeu."""
 from __future__ import annotations
 
+import re
 from pathlib import PurePath
 from typing import Any
 
@@ -58,6 +59,14 @@ def todo_items(data: dict | None) -> list[dict]:
     todos = (data or {}).get("todos")
     return [{"content": t["content"], "status": t["status"]} for t in (todos if isinstance(todos, list) else [])
             if isinstance(t, dict) and isinstance(t.get("content"), str) and isinstance(t.get("status"), str)]
+
+
+PR_COMMAND = re.compile(r"\b(gh\s+pr\s+create|glab\s+mr\s+create)\b")
+
+
+def is_pr_command(name: str, data: dict | None) -> bool:
+    """Commande Bash qui ouvre une PR (GitHub) ou une MR (GitLab) : le ticket est livré quand elle réussit."""
+    return name == "Bash" and bool(PR_COMMAND.search(str((data or {}).get("command", ""))))
 
 
 def deliverable_for(name: str, data: dict | None) -> dict | None:
