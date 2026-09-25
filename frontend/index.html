@@ -102,6 +102,13 @@ ul{list-style:none;margin:0;padding:0}
 .log{max-height:260px;overflow:auto;font-size:.9rem}
 .log li{padding:3px 0;border-bottom:1px dotted var(--panel-2)}
 .log time{color:var(--ink-soft);margin-right:6px}
+/* Grand écran : journal à gauche, open space au centre (tient dans la hauteur), panneaux à droite */
+@media (min-width:1600px){
+  .app{max-width:none}
+  .layout{grid-template-columns:380px minmax(0,1fr) 380px;grid-template-areas:"log stage side"}
+  #office{width:min(100%,calc((100vh - 210px) * 240 / 176));margin-inline:auto}
+  .log{max-height:calc(100vh - 150px)}
+}
 .modal{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px));pointer-events:none;z-index:10}
 .modal[hidden]{display:none}
 .modal .card{pointer-events:auto;width:min(520px,100%);display:grid;grid-template-columns:64px 1fr;gap:10px 14px;background:var(--panel);border:3px solid var(--shadow);
