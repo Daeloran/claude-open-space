@@ -602,7 +602,8 @@ function updateAgent(a, dt) {
     a.icon = "ask"; a.label = waitLabel; a.dir = h.face;
   } else {
     a.icon = a.ticket || a.waiting ? "think" : null;
-    a.label = a.ticket ? "Réfléchit sur « " + a.ticket.title + " »" : idle;
+    a.label = a.pausedUntil ? "En pause jusqu'à " + fmtHour(a.pausedUntil) + " (limite d'usage)"
+      : a.ticket ? "Réfléchit sur « " + a.ticket.title + " »" : idle;
     a.dir = h.face;
   }
 }
@@ -647,6 +648,7 @@ function draw() {
 /* ---------- Interface ---------- */
 const fmtUsd = v => v.toLocaleString("fr-FR", { style: "currency", currency: "USD", currencyDisplay: "narrowSymbol" });
 const fmtTok = n => n >= 1000 ? (n / 1000).toFixed(1).replace(".", ",") + " k" : String(n);
+const fmtHour = iso => new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 const fmtReset = iso => { const d = new Date(iso); return isNaN(d) ? "" : "reset " + d.toLocaleDateString("fr-FR", { weekday: "short" }) + " " + d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }); };
 const clock = () => new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 function log(text) {
@@ -1034,6 +1036,8 @@ function handle(ev) {
       checkDest(); break;
     }
     case "resume_rejected": if (S.resuming) { log("Reprise impossible : " + ev.reason); $("#ticketTitle").value ||= S.resuming.title; S.resuming = null; } break;
+    case "paused": if (a) { a.pausedUntil = ev.until; log(a.name + " a atteint la limite d'usage, reprise à " + fmtHour(ev.until) + "."); } break;
+    case "resumed": if (a) a.pausedUntil = null; break;
     case "mode_changed": if (a) { a.mode = ev.mode; log(a.name + " passe en mode " + ev.mode + "."); } break;
     case "mode_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
     case "interrupt_rejected": if (Chat.id === ev.agent_id) chatStatus(ev.reason, true); break;
@@ -1067,7 +1071,7 @@ function handle(ev) {
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
-      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; x.commands = (ev.commands || {})[x.id]; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
+      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; x.pausedUntil = m.paused_until; x.commands = (ev.commands || {})[x.id]; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
       S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; x.todos = (ev.todos || {})[x.id]; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });

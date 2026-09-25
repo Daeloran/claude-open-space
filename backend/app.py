@@ -62,6 +62,12 @@ DONE_KEPT = 50
 DELIV_KEPT = 20  # livrables gardés pour le snapshot (le panneau en montre 4)
 MODES = ("default", "acceptEdits", "plan", "bypassPermissions", "auto")  # Maj+Tab du terminal, par employé
 ANSWER_MAX = 4000  # caractères par réponse à une question
+LIMIT_MARGIN = 60  # secondes après la remise à zéro de la limite avant de reprendre
+LIMIT_RETRY = 300  # sans heure de remise à zéro connue : nouvel essai toutes les 5 min
+
+
+async def wait_until_reset(seconds: float) -> None:
+    await asyncio.sleep(seconds)
 
 
 @dataclass
@@ -107,6 +113,10 @@ class Hub:
             done = [k for k, v in self.board.items() if v["status"] == "done"]
             for k in done[:-DONE_KEPT]:
                 del self.board[k]
+        elif kind == "paused" and (a := self.agents.get(ev["agent_id"])):
+            a["paused_until"] = ev["until"]
+        elif kind == "resumed" and (a := self.agents.get(ev["agent_id"])):
+            a.pop("paused_until", None)
         elif kind == "mode_changed" and (a := self.agents.get(ev["agent_id"])):
             a["mode"] = ev["mode"]
         elif kind == "agent_hired":
@@ -213,6 +223,8 @@ class Employee:
         self.task: asyncio.Task | None = None  # run(), annulée au congé
         self.current: Ticket | None = None  # ticket en cours de réponse
         self.interrupted = False
+        self.limited: tuple[int | None] | None = None  # (resets_at,) si la limite d'usage a rejeté la réponse
+        self.pause: asyncio.Task | None = None  # attente de la remise à zéro de la limite
         self.cost_base = 0.0  # total_cost_usd cumulé déjà compté pour la session en cours
         self.commands: list[dict] | None = None  # commandes slash de la session, connues à la connexion
         self.session_id: str | None = None  # session SDK, connue au premier message : son transcript sert au panneau
@@ -298,12 +310,18 @@ class Employee:
                         clear = True
                         await self.forget_session()
                         continue
-                    await client.query(ticket.title)
-                    async for msg in client.receive_response():
-                        c, t = await self.translate(msg)
-                        cost, tokens = cost + c, tokens + t
-                        if isinstance(msg, ResultMessage):
-                            ok = not getattr(msg, "is_error", False)
+                    prompt = ticket.title
+                    while True:
+                        self.limited = None
+                        await client.query(prompt)
+                        async for msg in client.receive_response():
+                            c, t = await self.translate(msg)
+                            cost, tokens = cost + c, tokens + t
+                            if isinstance(msg, ResultMessage):
+                                ok = not getattr(msg, "is_error", False)
+                        if ok or self.limited is None or self.interrupted or not await self.wait_limit():
+                            break
+                        prompt, ok = "continue", True  # même session : le travail coupé reprend avec son contexte
                     # Mesure après la réponse (couvre aussi une compaction survenue pendant le ticket)
                     await self.refresh_context(client)
                 except Exception as exc:
@@ -317,6 +335,22 @@ class Employee:
                                         "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
                                         **({"reason": "interrompu"} if self.interrupted else {})})
                     self.tickets.task_done()
+
+    async def wait_limit(self) -> bool:
+        """Limite d'usage atteinte : pause jusqu'à sa remise à zéro. False si interrompu pendant la pause."""
+        (resets_at,) = self.limited
+        now = datetime.now(timezone.utc).timestamp()
+        delay = max(resets_at - now, 0) + LIMIT_MARGIN if resets_at else LIMIT_RETRY
+        until = datetime.fromtimestamp(now + delay, timezone.utc).isoformat()
+        await hub.emit({"type": "paused", "agent_id": self.id, "until": until})
+        self.pause = asyncio.ensure_future(wait_until_reset(delay))
+        try:
+            await asyncio.wait({self.pause})  # l'annulation de la pause (interrupt) ne remonte pas ici
+        finally:
+            self.pause.cancel()
+            self.pause = None
+            await hub.emit({"type": "resumed", "agent_id": self.id})
+        return not self.interrupted
 
     async def forget_session(self) -> None:
         """/clear : la conversation repart de zéro (plus de reprise), le panneau et la fatigue aussi."""
@@ -355,6 +389,9 @@ class Employee:
         if not self.current or not self.client:
             return
         self.interrupted = True
+        if self.pause:  # en pause sur la limite : pas de réponse en cours à stopper
+            self.pause.cancel()
+            return
         await self.deny_pending()
         await self.client.interrupt()
 
@@ -423,6 +460,9 @@ class Employee:
         elif isinstance(msg, ConversationResetMessage):  # cumul du SDK remis à zéro
             self.cost_base = 0.0
         elif isinstance(msg, RateLimitEvent):
+            if getattr(msg.rate_limit_info, "status", None) == "rejected":
+                ts = getattr(msg.rate_limit_info, "resets_at", None)
+                self.limited = (ts if isinstance(ts, (int, float)) else None,)
             if plan.apply_rate_limit(msg.rate_limit_info):
                 await hub.emit(plan.event)
         elif isinstance(msg, SystemMessage):

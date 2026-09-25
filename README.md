@@ -68,7 +68,7 @@ Le backend traduit les messages du SDK en événements de jeu. Le front ne conna
 
 ### Événements backend → front
 
-`hello`, `snapshot`, `agent_hired`, `ticket_rejected`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`, `observed_joined`, `observed_left`, `observed_status`, `observed_turn_end`, `chat_history`, `chat_entry`
+`hello`, `snapshot`, `agent_hired`, `ticket_rejected`, `ticket_created`, `ticket_assigned`, `tool_use`, `tool_result`, `permission_request`, `permission_resolved`, `subagent_spawned`, `subagent_done`, `deliverable`, `context`, `compaction`, `cost`, `ticket_done`, `message`, `plan_usage`, `observed_joined`, `observed_left`, `observed_status`, `observed_turn_end`, `chat_history`, `chat_entry`, `paused`, `resumed`
 
 `hello` : `{"team": [{"id", "name", "cwd", "project"}], "projects": [{"cwd", "name"}]}` (employés recrutés, projets proposés). `agent_hired` : `{"agent": {"id", "name", "cwd", "project"}}`. `ticket_rejected` : `{"title", "reason"}`, envoyé au seul onglet émetteur (employé inconnu, dossier introuvable ou ticket sans destination).
 
@@ -83,6 +83,8 @@ Stagiaires : cliquer sur un stagiaire ouvre le panneau en lecture seule sur son 
 `todos` : `{"agent_id", "todos": [{"content", "status"}]}`, dernière liste TodoWrite d'un employé (piloté ou terminal ; éléments invalides ignorés), rejouée dans le `snapshot` (`todos` : `{agent_id: [...]}`). Affichée dans le bandeau d'avancement du panneau (état, ticket, fatigue, tâches) et en « n/m tâches » dans « Équipe ».
 
 `plan_usage` : `{"five_hour": {"utilization": 42, "resets_at": "<ISO 8601>"} | null, "seven_day": {...} | null}`, `utilization` en % (0-100). Envoyé à la connexion, toutes les 3 min et à chaque `RateLimitEvent` du SDK. Source : token OAuth de `$CLAUDE_CONFIG_DIR/.credentials.json` (défaut `~/.claude`) et endpoint non documenté `GET https://api.anthropic.com/api/oauth/usage` ; `null` (« — » dans le bandeau) si indisponible.
+
+`paused` `{"agent_id", "until": "<ISO 8601>"}` / `resumed` `{"agent_id"}` : un employé piloté a atteint la limite d'usage (`RateLimitEvent` `rejected` et réponse en erreur). Son ticket reste en cours ; il attend `resets_at` + 60 s (5 min sans `resets_at`), puis envoie `continue` dans la même session. Les tickets suivants attendent. Nouveau rejet : nouvelle pause. Interrompre ou congédier annule la pause. `paused_until` est aussi dans l'employé du `snapshot`.
 
 ### Messages front → backend
 
