@@ -23,6 +23,7 @@ from fastapi.responses import FileResponse
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
+    ConversationResetMessage,
     ClaudeSDKClient,
     PermissionResultAllow,
     PermissionResultDeny,
@@ -224,6 +225,7 @@ class Employee:
         self.interrupted = False
         self.limited: tuple[int | None] | None = None  # (resets_at,) si la limite d'usage a rejeté la réponse
         self.pause: asyncio.Task | None = None  # attente de la remise à zéro de la limite
+        self.cost_base = 0.0  # total_cost_usd cumulé déjà compté pour la session en cours
         self.commands: list[dict] | None = None  # commandes slash de la session, connues à la connexion
         self.session_id: str | None = None  # session SDK, connue au premier message : son transcript sert au panneau
         self.tail: TranscriptTail | None = None
@@ -290,6 +292,7 @@ class Employee:
         async with ClaudeSDKClient(options=self.options) as client:
             self.client = client
             self.commands, clear = None, False
+            self.cost_base = 0.0  # nouveau processus : le cumul du SDK repart de zéro
             while not clear:
                 ticket = await self.tickets.get()
                 self.current, self.interrupted, self.delivered = ticket, False, False
@@ -454,6 +457,8 @@ class Employee:
                                             "usd": 0.0, "tokens": 0, "ok": True})
                     if sid := self.subagents.pop(block.tool_use_id, None):
                         await hub.emit({"type": "subagent_done", "agent_id": sid})
+        elif isinstance(msg, ConversationResetMessage):  # cumul du SDK remis à zéro
+            self.cost_base = 0.0
         elif isinstance(msg, RateLimitEvent):
             if getattr(msg.rate_limit_info, "status", None) == "rejected":
                 ts = getattr(msg.rate_limit_info, "resets_at", None)
@@ -471,7 +476,10 @@ class Employee:
             get = lambda k: int(usage.get(k, 0) or 0)  # noqa: E731
             ctx_tokens = get("input_tokens") + get("cache_read_input_tokens") + get("cache_creation_input_tokens")
             tokens = ctx_tokens + get("output_tokens")
-            cost = float(msg.total_cost_usd or 0)
+            # total_cost_usd est cumulé sur la session : on compte l'écart ; cumul en baisse = remise à zéro
+            total = float(msg.total_cost_usd or 0)
+            cost = total - self.cost_base if total >= self.cost_base else total
+            self.cost_base = total
             await hub.emit({"type": "cost", "agent_id": self.id, "usd": cost, "tokens": tokens})
             return cost, tokens
         return 0.0, 0
