@@ -1,0 +1,14 @@
+# Service utilisateur : l'Open Space démarre à la connexion. Voir README « Lancer au démarrage ».
+[Unit]
+Description=L'Open Space (Claude Code)
+
+[Service]
+# Chemin du clone : à adapter s'il n'est pas dans ~/Projets
+WorkingDirectory=%h/Projets/claude-open-space
+# zsh interactif : le PATH des employés (gh, node, claude…) est celui de ~/.zshrc, comme dans le terminal
+ExecStart=/usr/bin/zsh -ic 'exec .venv/bin/uvicorn backend.app:app --host 127.0.0.1 --port 8000'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
