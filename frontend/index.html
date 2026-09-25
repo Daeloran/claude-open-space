@@ -506,7 +506,7 @@ const OBS_LOOKS = [
   { hair: "#c98a3b", shirt: "#2f3542", pants: "#1f2430", skin: "#d9a37a" },
 ];
 const MANAGER = { hair: "#4a2e1c", shirt: "#f4efe4", pants: "#2f3542", skin: "#e6b58f" };
-const S = { plan: {}, agents: new Map(), projects: [], hiring: null, tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], ticketCost: 0 };
+const S = { plan: {}, agents: new Map(), projects: [], hiring: null, tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], delivCount: 0, ticketCost: 0 };
 let T = 0;
 
 const staff = () => [...S.agents.values()].filter(a => !a.intern && !a.gone);
@@ -711,7 +711,7 @@ function renderStats() {
   });
   $("#kAvg").textContent = S.done ? fmtUsd(S.ticketCost / S.done) : "–";
   $("#kDeny").textContent = S.denied + " / " + S.perms;
-  $("#kDeliv").textContent = S.deliv.length;
+  $("#kDeliv").textContent = S.delivCount;
   $("#kCoffee").textContent = S.coffee;
   const ul = $("#deliv"); ul.innerHTML = "";
   S.deliv.slice(-4).reverse().forEach(d => { const li = document.createElement("li"); li.textContent = (d.kind === "commit" ? "Commit : " : d.kind === "write" ? "Nouveau : " : "Modifié : ") + d.path; ul.appendChild(li); });
@@ -1041,6 +1041,9 @@ function handle(ev) {
       const done = ev.tickets.filter(t => t.status === "done" && t.ok !== false);
       S.done = done.length; S.ticketCost = done.reduce((s, t) => s + (t.usd || 0), 0);
       S.cost = ev.totals.usd; S.tokens = ev.totals.tokens;
+      if (ev.plan_usage) S.plan = ev.plan_usage;
+      S.deliv = ev.deliverables || []; S.delivCount = ev.deliverable_count || 0; S.coffee = ev.coffee || 0;
+      if (ev.permissions) { S.perms = ev.permissions.total; S.denied = ev.permissions.denied; }
       [...permReqs.keys()].forEach(dropPerm);
       ev.pending_permissions.forEach(handle);
       renderTickets(); renderTeam(); break;
@@ -1067,7 +1070,7 @@ function handle(ev) {
       else { chatLog.replaceChildren(); chatAppend(ev.entries, true); }
       break;
     case "chat_entry": if (ev.agent_id === Chat.id && ev.entry) chatAppend([ev.entry]); break;
-    case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); break;
+    case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); S.delivCount++; break;
     case "context": if (a) a.fatigue = ev.ratio; break;
     case "todos": if (a) a.todos = ev.todos; break;
     case "commands": if (a) a.commands = ev.commands; break;

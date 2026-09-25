@@ -58,6 +58,7 @@ CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "testserver"}
 # Tickets terminés gardés pour le snapshot : au-delà, les plus anciens sont oubliés (mémoire bornée)
 DONE_KEPT = 50
+DELIV_KEPT = 20  # livrables gardés pour le snapshot (le panneau en montre 4)
 MODES = ("default", "acceptEdits", "plan", "bypassPermissions", "auto")  # Maj+Tab du terminal, par employé
 ANSWER_MAX = 4000  # caractères par réponse à une question
 
@@ -83,6 +84,12 @@ class Hub:
         self.todos: dict[str, list[dict]] = {}  # agent_id -> dernière liste TodoWrite
         self.commands: dict[str, list[dict]] = {}  # agent_id -> commandes slash de sa session
         self.requests: dict[str, dict] = {}  # request_id -> événement permission_request en attente
+        # Stats de l'en-tête et de la Direction, rendues au rechargement de la page
+        self.plan_usage: dict | None = None
+        self.deliverables: list[dict] = []  # les DELIV_KEPT derniers ; deliverable_count les compte tous
+        self.deliverable_count = 0
+        self.coffee = 0
+        self.permissions = {"total": 0, "denied": 0}  # décisions rendues depuis le jeu
         # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
         self.terminal: dict[str, dict] = {}
         # agent_id -> clients dont le panneau de discussion est ouvert sur cet employé
@@ -128,11 +135,20 @@ class Hub:
             self.requests[ev["request_id"]] = ev
         elif kind == "permission_resolved":
             self.requests.pop(ev["request_id"], None)
+        elif kind == "plan_usage":
+            self.plan_usage = ev
+        elif kind == "deliverable":
+            self.deliverable_count += 1
+            self.deliverables = [*self.deliverables, {"path": ev.get("path"), "kind": ev.get("kind")}][-DELIV_KEPT:]
+        elif kind == "compaction":
+            self.coffee += 1
 
     def snapshot(self) -> dict:
         return {"type": "snapshot", "agents": list(self.agents.values()),
                 "tickets": list(self.board.values()), "totals": dict(self.totals),
-                "context": dict(self.context), "todos": dict(self.todos), "commands": dict(self.commands), "pending_permissions": list(self.requests.values())}
+                "context": dict(self.context), "todos": dict(self.todos), "commands": dict(self.commands), "pending_permissions": list(self.requests.values()),
+                "plan_usage": self.plan_usage, "deliverables": list(self.deliverables),
+                "deliverable_count": self.deliverable_count, "coffee": self.coffee, "permissions": dict(self.permissions)}
 
     async def emit(self, event: dict) -> None:
         if event.get("type") == "chat_entry":  # contenu de conversation : panneaux abonnés seulement, hors snapshot
@@ -638,6 +654,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 fut = hub.pending.get(rid)
                 if fut and not fut.done():
                     fut.set_result((allow, data.get("answers")))
+                    hub.permissions["total"] += 1
+                    hub.permissions["denied"] += not allow
                     # Ferme la popup sur les autres onglets
                     await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": allow})
     except WebSocketDisconnect:
