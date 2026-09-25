@@ -112,8 +112,9 @@ class Hub:
             self.agents[ev["agent"]["id"]] = ev["agent"]
         elif kind == "observed_joined":  # session du terminal
             self.agents[ev["agent"]["id"]] = {**ev["agent"], "observed": True}
-        elif kind == "observed_left":
+        elif kind in ("observed_left", "agent_left"):  # session terminal partie ou employé congédié
             self.agents.pop(ev["agent_id"], None)
+            self.commands.pop(ev["agent_id"], None)
             self.context.pop(ev["agent_id"], None)
             self.todos.pop(ev["agent_id"], None)
             self.chats.pop(ev["agent_id"], None)
@@ -208,6 +209,7 @@ class Employee:
         self.delivered = False  # ticket en cours déjà livré (PR/MR créée) : pas de second ticket_done
         self.intern_seq = 0
         self.client: ClaudeSDKClient | None = None
+        self.task: asyncio.Task | None = None  # run(), annulée au congé
         self.current: Ticket | None = None  # ticket en cours de réponse
         self.interrupted = False
         self.commands: list[dict] | None = None  # commandes slash de la session, connues à la connexion
@@ -350,11 +352,31 @@ class Employee:
         if not self.current or not self.client:
             return
         self.interrupted = True
+        await self.deny_pending()
+        await self.client.interrupt()
+
+    async def deny_pending(self) -> None:
         for rid in [r for r, ev in hub.requests.items() if ev.get("agent_id") == self.id]:
             if (fut := hub.pending.get(rid)) and not fut.done():  # sa demande en attente tombe avec la réponse
                 fut.set_result((False, None))
                 await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": False})
-        await self.client.interrupt()
+
+    async def dismiss(self) -> None:
+        """Congé : demandes refusées, tickets en attente en échec, session fermée ; la conversation reste sur disque."""
+        employees.pop(self.id, None)
+        self.interrupted = True  # le ticket en cours se termine en échec (émis par _work à l'annulation)
+        await self.deny_pending()
+        if self.task:
+            self.task.cancel()  # sortie du `async with ClaudeSDKClient` : processus fermé
+            await asyncio.gather(self.task, return_exceptions=True)
+        while not self.tickets.empty():  # après l'annulation : plus personne ne les prend
+            t = self.tickets.get_nowait()
+            self.tickets.task_done()
+            await hub.emit({"type": "ticket_done", "ticket_id": t.id, "agent_id": self.id,
+                            "usd": 0.0, "tokens": 0, "ok": False, "reason": "congédié"})
+        for sid in self.subagents.values():
+            await hub.emit({"type": "subagent_done", "agent_id": sid})
+        await hub.emit({"type": "agent_left", "agent_id": self.id})
 
     async def translate(self, msg) -> tuple[float, int]:
         who = self.actor(msg)
@@ -446,7 +468,7 @@ class Employee:
         await hub.emit({"type": "context", "agent_id": self.id, "ratio": min(1.0, max(0.0, ratio))})
 
 
-employees: dict[str, Employee] = {}  # recrutés à la demande, jamais licenciés (hors scope #12)
+employees: dict[str, Employee] = {}  # recrutés à la demande, retirés au congé (#59)
 workers: set[asyncio.Task] = set()   # tâches run() des employés, annulées à l'arrêt
 
 
@@ -480,7 +502,7 @@ def resume_target(sid: str) -> tuple[str | None, str | None]:
 async def hire(cwd: str, resume: str | None = None) -> Employee:
     e = Employee(len(employees), recruit_name(len(employees)), cwd, resume)
     employees[e.id] = e
-    task = asyncio.create_task(e.run(), name=f"employee-{e.id}")
+    task = e.task = asyncio.create_task(e.run(), name=f"employee-{e.id}")
     workers.add(task)
     task.add_done_callback(workers.discard)
     await hub.emit({"type": "agent_hired", "agent": e.info()})
@@ -653,6 +675,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 else:
                     await ws.send_json({"type": "mode_rejected", "agent_id": aid, "reason": (
                         "Mode inconnu." if e else "Seuls les employés pilotés changent de mode depuis le jeu.")})
+            elif kind == "dismiss":
+                aid = str(data.get("agent_id"))
+                if e := employees.get(aid):
+                    await e.dismiss()
+                elif observer and aid in observer.watched:
+                    await observer.hide(aid)
             elif kind == "interrupt":
                 aid = str(data.get("agent_id"))
                 if e := employees.get(aid):

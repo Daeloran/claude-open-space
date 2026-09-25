@@ -235,6 +235,17 @@ class Observer:
         self.pid_alive = pid_alive
         self.window = context_window
         self.watched: dict[str, dict] = {}  # agent_id -> {"status", "sid", "tail", "tools"}
+        # Sessions congédiées : ignorées tant qu'elles vivent (nouvelle session = nouvel id, elle réapparaît)
+        # ponytail: jamais purgé, quelques ids par journée ; purge si l'Open Space tourne des semaines
+        self.hidden: set[str] = set()
+
+    async def hide(self, aid: str) -> None:
+        """Congé d'un employé terminal : retiré du jeu, sa session Claude Code n'est pas touchée."""
+        self.hidden.add(aid)
+        w = self.watched.pop(aid, None) or {"interns": {}}
+        for sid in w["interns"].values():
+            await self.emit({"type": "subagent_done", "agent_id": sid})
+        await self.emit({"type": "observed_left", "agent_id": aid, "dismissed": True})
 
     async def poll(self) -> None:
         for ev in await asyncio.to_thread(self._scan):
@@ -247,6 +258,8 @@ class Observer:
             out.extend({"type": "subagent_done", "agent_id": sid} for sid in self.watched.pop(aid)["interns"].values())
             out.append({"type": "observed_left", "agent_id": aid})
         for aid, s in live.items():
+            if aid in self.hidden:
+                continue
             w = self.watched.get(aid)
             if w is None:
                 w = self.watched[aid] = {"status": s["status"], "sid": s["session_id"], "pid": s["pid"],

@@ -92,6 +92,7 @@ ul{list-style:none;margin:0;padding:0}
 .team li:last-child{border-bottom:0}
 .team canvas{width:34px;height:42px;image-rendering:pixelated;grid-row:span 3;background:var(--panel-2);box-shadow:0 0 0 2px var(--shadow)}
 .team .name{font-weight:600}
+.team .bye{float:right;padding:0 6px;font-size:.85rem;line-height:1.2;box-shadow:0 2px 0 var(--shadow)}
 .proj{font-size:.75rem;font-weight:400;padding:0 5px;margin-left:6px;background:var(--sky);color:#fff}
 .proj.term{background:#2f3542;color:#7be07b}
 .team .status{font-size:.88rem;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -145,12 +146,12 @@ ul{list-style:none;margin:0;padding:0}
 .grip{flex:none;height:12px;cursor:ns-resize;touch-action:none}
 .grip::before{content:"";display:block;width:48px;height:4px;margin:4px auto;background:var(--chat-rule)}
 .grip:focus-visible{outline:2px solid var(--link);outline-offset:-2px}
-.chat header{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto;gap:0 10px;align-items:center;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));
+.chat header{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto auto;gap:0 10px;align-items:center;padding:10px 12px;padding-top:calc(10px + env(safe-area-inset-top,0px));
   background:var(--frame);color:var(--on-frame);box-shadow:inset 0 -2px 0 var(--frame-hi),0 3px 0 var(--shadow);font-family:"Pixelify Sans",ui-monospace,monospace;position:relative}
 .chat header canvas{width:32px;height:40px;image-rendering:pixelated;grid-row:span 2;background:var(--shadow)}
 .chat header h2{margin:0;font-size:1.2rem;font-weight:600;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat header p{margin:0;font-size:.85rem;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat header button{grid-row:1/3;grid-column:4}.chat header #chatStop{grid-column:3}.chat header #chatStop[hidden]{display:none}
+.chat header button{grid-row:1/3;grid-column:5}.chat header #chatStop{grid-column:3}.chat header #chatDismiss{grid-column:4}.chat header #chatStop[hidden],.chat header #chatDismiss[hidden]{display:none}
 .chat-log{flex:1;overflow-y:auto;padding:16px 14px 10px;display:flex;flex-direction:column;gap:10px;overscroll-behavior:contain}
 .msg{max-width:92%;padding:8px 12px;overflow-wrap:anywhere}
 .msg.user{align-self:flex-end;background:var(--bubble-user);white-space:pre-wrap;border-radius:12px 12px 3px 12px}
@@ -304,6 +305,7 @@ ul{list-style:none;margin:0;padding:0}
     <h2 id="chatName"></h2>
     <p id="chatProj"></p>
     <button type="button" class="danger" id="chatStop" title="Interrompre sa réponse (Échap dans le champ vide)" hidden>Interrompre</button>
+    <button type="button" id="chatDismiss" title="Congédier : il quitte l'open space">Congédier</button>
     <button type="button" id="chatClose" title="Fermer (Échap)">Fermer</button>
   </header>
   <p class="wait" id="chatWait" role="status" hidden></p>
@@ -526,7 +528,7 @@ const S = { plan: {}, agents: new Map(), projects: [], hiring: null, tickets: []
 let T = 0;
 
 const staff = () => [...S.agents.values()].filter(a => !a.intern && !a.gone);
-const pilotable = () => staff().filter(a => !a.observed);
+const pilotable = () => staff().filter(a => !a.observed && !a.leaving);
 // Un bureau par employé : pilotés d'abord, sessions du terminal derrière (dernières rangées)
 function seatStaff() {
   const st = staff().sort((p, q) => p.observed - q.observed);
@@ -686,7 +688,11 @@ function renderTeam() {
       {
         a.el.className = "talk"; a.el.tabIndex = 0; a.el.setAttribute("role", "button"); a.el.title = "Discuter avec " + a.name;
         a.el.onclick = () => openChat(a);
-        a.el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChat(a); } };
+        a.el.onkeydown = e => { if (e.target === a.el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openChat(a); } };
+      }
+      if (!a.intern) {
+        const x = document.createElement("button"); x.type = "button"; x.className = "bye"; x.textContent = "×"; x.title = "Congédier " + a.name; x.setAttribute("aria-label", x.title);
+        x.onclick = e => { e.stopPropagation(); dismiss(a); }; a.el.querySelector(".name").append(x);
       }
       ul.appendChild(a.el);
     }
@@ -871,6 +877,12 @@ function chatWait(a) {
   $("#chatWait").textContent = w ? "En attente de ta réponse dans son terminal" + (a.waitingFor ? " : " + a.waitingFor : "") : "";
 }
 function chatStatus(text, err) { $("#chatStatus").textContent = text; $("#chatStatus").classList.toggle("err", !!err); }
+function dismiss(a) {
+  if (!a || a.leaving || a.gone) return;
+  if (!confirm("Congédier " + a.name + " ?\n" + (a.observed ? "Sa session continue dans ton terminal, il disparaît seulement du jeu. Son ticket en cours passe en échec."
+    : "Sa réponse en cours s'arrête, ses tickets en cours ou en attente passent en échec. Sa conversation reste reprenable (« Reprendre une conversation… »)."))) return;
+  transport.send({ type: "dismiss", agent_id: a.id });
+}
 function openChat(a) {
   if (!a || a.gone || a.leaving) return;
   if (Chat.id === a.id) { if (!a.intern) $("#chatInput").focus(); return; }
@@ -923,6 +935,7 @@ $("#chatInput").addEventListener("keydown", e => { if (e.key === "Tab" && !$("#c
 $("#chatForm").addEventListener("submit", e => { e.preventDefault(); sendReply(); });
 $("#chatInput").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendReply(); } });
 $("#chatClose").onclick = () => closeChat();
+$("#chatDismiss").onclick = () => dismiss(S.agents.get(Chat.id));
 // Hauteur du panneau en vh (20..85), à la souris/au doigt sur le bord haut ou aux flèches
 function chatHeight(vh) {
   vh = Math.min(85, Math.max(20, Math.round(vh)));
@@ -947,7 +960,7 @@ document.addEventListener("keydown", e => {
 function interrupt() { if (Chat.id) { transport.send({ type: "interrupt", agent_id: Chat.id }); chatStatus("Interruption demandée…"); } }
 $("#chatStop").onclick = interrupt;
 // Bouton visible pendant qu'un piloté répond à un ticket
-setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); if (a) chatState(a);
+setInterval(() => { const a = Chat.id && S.agents.get(Chat.id); $("#chatStop").hidden = !(a && !a.observed && a.ticket); $("#chatDismiss").hidden = !a || !!a.intern; if (a) chatState(a);
   $("#chatModeBox").hidden = !a || a.observed || a.intern;
   if (a && document.activeElement !== $("#chatMode")) $("#chatMode").value = a.mode || ""; }, 400);
 $("#chatMode").onchange = e => {
@@ -994,12 +1007,15 @@ function handle(ev) {
       const o = addAgent(ev.agent, { hired: true });
       log(o.name + " (terminal) arrive sur le projet " + o.project + "."); break;
     }
-    case "observed_left": {
+    case "observed_left": case "agent_left": {
       if (!a || a.leaving) break;
       if (Chat.id === a.id) closeChat(true);
+      const bye = ev.type === "agent_left" || ev.dismissed;
       a.leaving = true; a.queue = [];
-      enqueue(a, { spot: "door", icon: null, dwell: 0, label: "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); renderDest(); } });
-      log(a.name + " ferme sa session terminal. Pour la continuer ici : « Reprendre une conversation… » dans les tickets."); break;
+      enqueue(a, { spot: "door", icon: null, dwell: 0, label: bye ? "Rentre chez lui" : "Ferme son terminal", onDone: () => { a.gone = true; a.hidden = true; renderTeam(); S.agents.delete(a.id); seatStaff(); renderDest(); } });
+      log(ev.type === "agent_left" ? a.name + " est congédié. Sa conversation reste disponible : « Reprendre une conversation… » dans les tickets."
+        : ev.dismissed ? a.name + " quitte le jeu ; sa session continue dans ton terminal."
+        : a.name + " ferme sa session terminal. Pour la continuer ici : « Reprendre une conversation… » dans les tickets."); break;
     }
     case "observed_status": {
       if (!a) break;
@@ -1300,6 +1316,13 @@ const Demo = {
         { session_id: "demo-s2", cwd: "/home/manager/projets/outils-internes", project: "outils-internes", title: "Le script de sauvegarde plante", updated: new Date(Date.now() - 86400e3).toISOString(), live: true }] });
       if (msg.type === "resume") this.hire(this.projects[0].cwd, msg.session_id);
       if (msg.type === "set_mode") { const to = S.agents.get(msg.agent_id); this.emit(to && !to.observed ? { type: "mode_changed", agent_id: msg.agent_id, mode: msg.mode } : { type: "mode_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés changent de mode depuis le jeu." }); }
+      if (msg.type === "dismiss") {
+        const to = S.agents.get(msg.agent_id); if (!to) return;
+        if (!to.observed && to.ticket) this.stop.add(to.id); // le ticket en cours s'arrête en échec (runTicket)
+        S.tickets.filter(t => t.status === "attente" && this.dest.get(t.id) === to.id)
+          .forEach(t => { this.dest.delete(t.id); this.emit({ type: "ticket_done", ticket_id: t.id, agent_id: to.id, ok: false }); });
+        this.emit(to.observed ? { type: "observed_left", agent_id: to.id, dismissed: true } : { type: "agent_left", agent_id: to.id });
+      }
       if (msg.type === "interrupt") { const to = S.agents.get(msg.agent_id); if (to && !to.observed && to.ticket) this.stop.add(msg.agent_id); else if (to && to.observed) this.emit({ type: "interrupt_rejected", agent_id: msg.agent_id, reason: "Seuls les employés pilotés peuvent être interrompus depuis le jeu." }); }
       if (msg.type === "permission_decision") { const r = this.pending.get(msg.request_id); if (r) { this.pending.delete(msg.request_id); r(msg.allow); } }
     };
@@ -1319,7 +1342,8 @@ const Demo = {
       if (!pool.length) pool = [...this.titles].sort(() => Math.random() - .5);
       // De temps en temps, un client arrive avec un nouveau projet : on recrute
       const free = this.projects.filter(p => !pilotable().some(a => a.cwd === p.cwd));
-      this.newTicket(pool.shift(), free.length && Math.random() < .25 ? this.hire(free[0].cwd) : this.pick(pilotable()).id);
+      const busy = pilotable(); // tous congédiés : on recrute
+      this.newTicket(pool.shift(), free.length && (!busy.length || Math.random() < .25) ? this.hire(free[0].cwd) : this.pick(busy).id);
     }, 22000);
     this.terminal();
     log("Bienvenue au bureau. Tu joues le rôle du manager : l'équipe viendra te voir pour les actions sensibles.");
