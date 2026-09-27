@@ -45,7 +45,7 @@ from .projects import first_cwd, recent_projects, resumable_sessions
 
 WORKDIR = os.environ.get("OPENSPACE_CWD")  # projet proposé en tête de liste
 # Réserve de prénoms pour les recrutements (cyclique, suffixée une fois épuisée)
-TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Léa,Hugo,Inès").split(",") if n.strip()]
+TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Jaina,Khadgar,Rhonin,Modera,Antonidas,Aethas,Kalec,Ansirem").split(",") if n.strip()]
 CONTEXT_WINDOW = int(os.environ.get("OPENSPACE_CONTEXT", "200000"))
 # Non défini : le defaultMode des réglages Claude Code de l'utilisateur s'applique
 PERMISSION_MODE = os.environ.get("OPENSPACE_PERMISSION_MODE") or None
@@ -99,6 +99,8 @@ class Hub:
         self.permissions = {"total": 0, "denied": 0}  # décisions rendues depuis le jeu
         # Session terminal -> ticket tapé dans son onglet : {"id", "busy", "sent"} (id None pendant l'envoi)
         self.terminal: dict[str, dict] = {}
+        # Session terminal -> {"tool_id": dernier tool_use examiné, "rid": sa demande de permission ouverte ou None}
+        self.term_perms: dict[str, dict] = {}
         # agent_id -> clients dont le panneau de discussion est ouvert sur cet employé
         self.chats: dict[str, set[WebSocket]] = {}
 
@@ -185,6 +187,7 @@ class Hub:
                 self.clients.discard(ws)
         await self.follow_terminal(event)
         await self.terminal_done(event, prev)
+        await terminal_permission(event)
 
     async def follow_terminal(self, ev: dict) -> None:
         """Ticket d'une session terminal terminé au premier signal : fin de réponse dans le transcript
@@ -546,7 +549,7 @@ workers: set[asyncio.Task] = set()   # tâches run() des employés, annulées à
 
 
 def recruit_name(n: int) -> str:
-    """n-ième prénom de la réserve, suffixé (« Léa 2 ») quand la réserve est épuisée."""
+    """n-ième prénom de la réserve, suffixé (« Jaina 2 ») quand la réserve est épuisée."""
     name, lap = TEAM[n % len(TEAM)], n // len(TEAM)
     return f"{name} {lap + 1}" if lap else name
 
@@ -609,6 +612,63 @@ async def type_in_terminal(agent: dict, title: str) -> str | None:
     if reason := await konsole.send_prompt(pid, title):
         del hub.terminal[aid]
     return reason
+
+
+PERMISSION_PROMPT = "permission prompt"  # `waitingFor` d'une session Claude Code devant un dialogue de permission d'outil
+NOT_PERMISSIONS = ("AskUserQuestion", "ExitPlanMode")  # leurs dialogues ne sont pas Oui / Non (hors #23)
+
+
+def _prompting(a: dict | None) -> bool:
+    return bool(a) and a.get("status") == "waiting" and a.get("waiting_for") == PERMISSION_PROMPT
+
+
+async def terminal_permission(ev: dict) -> None:
+    """Permission d'outil d'une session terminal (#23) : popup quand la session est en « permission prompt »
+    sur un nouvel outil en attente, fermée sans rien envoyer quand elle n'y est plus (réponse faite au terminal,
+    résultat arrivé, session partie). Réévalué à chaque statut ou tool_use relevé : une demande enchaînée
+    sans changement de statut entre deux relèves est vue grâce à l'id de l'outil."""
+    if ev.get("type") not in ("observed_joined", "observed_status", "observed_left", "tool_use") or not observer:
+        return
+    aid = ev.get("agent_id") or ev.get("agent", {}).get("id")
+    if ev["type"] == "tool_use" and aid not in observer.watched:  # stagiaire ou employé piloté
+        return
+    cur = hub.term_perms.setdefault(aid, {"tool_id": None, "rid": None})
+    # ponytail: session déjà en attente à son arrivée dans le jeu : outil inconnu (transcript lu depuis la fin), pas de popup
+    tool = observer.pending_tool(aid) if _prompting(hub.agents.get(aid)) else None
+    if (rid := cur["rid"]) and (not tool or tool[0] != cur["tool_id"]):
+        cur["rid"] = None
+        if (fut := hub.pending.pop(rid, None)) and not fut.done():
+            fut.cancel()
+            await hub.emit({"type": "permission_resolved", "request_id": rid, "allow": None})
+    if ev["type"] == "observed_left":
+        hub.term_perms.pop(aid, None)
+    elif tool and tool[0] != cur["tool_id"]:
+        cur["tool_id"] = tool[0]
+        if tool[1] not in NOT_PERMISSIONS:
+            rid = cur["rid"] = uuid.uuid4().hex[:8]
+            fut = hub.pending[rid] = asyncio.get_running_loop().create_future()
+            await hub.emit({"type": "permission_request", "request_id": rid, "agent_id": aid,
+                            "tool": tool[1], "summary": tool[2]})
+            asyncio.create_task(answer_terminal_permission(aid, rid, fut))
+
+
+async def answer_terminal_permission(aid: str, rid: str, fut: asyncio.Future) -> None:
+    """Décision du jeu tapée dans l'onglet : « 1 » (Yes, toujours la 1re option) ou Échap (refus)."""
+    try:
+        allow, _ = await fut
+    except asyncio.CancelledError:  # réponse faite ailleurs : rien à envoyer
+        return
+    hub.pending.pop(rid, None)
+    if (cur := hub.term_perms.get(aid)) and cur["rid"] == rid:
+        cur["rid"] = None
+    pid = observer.watched.get(aid, {}).get("pid") if observer else None
+    # Relu au moment d'envoyer : l'état relevé a jusqu'à 2 s de retard
+    still = pid and any(s["pid"] == pid and s["status"] == "waiting" and s.get("waiting_for") == PERMISSION_PROMPT
+                        for s in await asyncio.to_thread(observer_mod.live_sessions, observer.config_dir, observer.pid_alive))
+    reason = (await konsole.send_keys(pid, "1" if allow else "\x1b") if still
+              else "La session n'attend plus cette permission : rien n'a été envoyé.")
+    if reason:
+        await hub.emit({"type": "message", "agent_id": aid, "text": reason})
 
 
 def chat_transcript(aid: str) -> Path | str:

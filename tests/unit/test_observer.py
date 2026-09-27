@@ -110,3 +110,25 @@ def test_fin_de_reponse_dans_le_transcript(tmp_path):
     assert ends(rec("end_turn")) == [{"type": "observed_turn_end", "agent_id": "o-1",
                                       "at": "2026-09-24T10:00:00.000Z"}]
     assert ends(rec("tool_use")) == [] and ends(rec(None)) == [] and ends(rec("end_turn", side=True)) == []
+
+
+def test_outil_en_attente_le_plus_recent(tmp_path):
+    o = Observer(tmp_path, None)
+    w = o.watched["o-1"] = {"tools": {}, "prs": set(), "interns": {}, "intern_seq": 0, "window": 200000}
+
+    def use(tid, name, inp):
+        return {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": tid, "name": name, "input": inp}]}}
+
+    def result(tid):
+        return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tid}]}}
+
+    assert o.pending_tool("o-1") is None and o.pending_tool("inconnu") is None
+    o._events("o-1", w, use("a", "Read", {"file_path": "/x"}))
+    o._events("o-1", w, use("b", "Bash", {"command": "ls"}))
+    assert o.pending_tool("o-1")[:2] == ("b", "Bash")
+    ev = o._events("o-1", w, result("b"))
+    assert ev[0]["tool"] == "Bash"  # le nom reste rendu au tool_result
+    assert o.pending_tool("o-1")[:2] == ("a", "Read")
+    o._events("o-1", w, result("a"))
+    assert o.pending_tool("o-1") is None
