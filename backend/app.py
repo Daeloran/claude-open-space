@@ -45,7 +45,7 @@ from .projects import first_cwd, recent_projects, resumable_sessions
 
 WORKDIR = os.environ.get("OPENSPACE_CWD")  # projet proposé en tête de liste
 # Réserve de prénoms pour les recrutements (cyclique, suffixée une fois épuisée)
-TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Léa,Hugo,Inès").split(",") if n.strip()]
+TEAM = [n.strip() for n in os.environ.get("OPENSPACE_TEAM", "Jaina,Khadgar,Rhonin,Modera,Antonidas,Aethas,Kalec,Ansirem").split(",") if n.strip()]
 CONTEXT_WINDOW = int(os.environ.get("OPENSPACE_CONTEXT", "200000"))
 # Non défini : le defaultMode des réglages Claude Code de l'utilisateur s'applique
 PERMISSION_MODE = os.environ.get("OPENSPACE_PERMISSION_MODE") or None
@@ -524,7 +524,7 @@ workers: set[asyncio.Task] = set()   # tâches run() des employés, annulées à
 
 
 def recruit_name(n: int) -> str:
-    """n-ième prénom de la réserve, suffixé (« Léa 2 ») quand la réserve est épuisée."""
+    """n-ième prénom de la réserve, suffixé (« Jaina 2 ») quand la réserve est épuisée."""
     name, lap = TEAM[n % len(TEAM)], n // len(TEAM)
     return f"{name} {lap + 1}" if lap else name
 
