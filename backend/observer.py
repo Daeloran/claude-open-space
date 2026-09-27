@@ -291,6 +291,11 @@ class Observer:
             out.extend(intern_updates(w["tail"].path, w["interns"], w.setdefault("intern_tails", {}), tools=True))
         return out
 
+    def pending_tool(self, aid: str) -> tuple[str, str, str] | None:
+        """Dernier `tool_use` de la session sans `tool_result` : (id, outil, résumé), ou None si aucun connu."""
+        tools = self.watched.get(aid, {}).get("tools") or {}
+        return next(((tid, *t) for tid, t in reversed(tools.items())), None)
+
     def _gone(self, w: dict) -> bool:
         """Absente du registre : partie, sauf si son fichier est en cours de réécriture (JSON tronqué)."""
         if not self.pid_alive(w["pid"]):
@@ -336,12 +341,12 @@ class Observer:
         if rec.get("type") == "assistant":
             for b in blocks:
                 if b.get("type") == "tool_use" and isinstance(name := b.get("name"), str):
-                    w["tools"][str(b.get("id"))] = name
-                    if is_pr_command(name, b.get("input") if isinstance(b.get("input"), dict) else {}):
-                        w["prs"].add(str(b.get("id")))
                     inp = b.get("input") if isinstance(b.get("input"), dict) else {}
-                    out.append({"type": "tool_use", "agent_id": aid, "tool": name,
-                                "summary": summarize_tool(name, inp) or name})
+                    # outil en attente de son résultat, avec son résumé (demande de permission, #23)
+                    w["tools"][str(b.get("id"))] = (name, summary := summarize_tool(name, inp) or name)
+                    if is_pr_command(name, inp):
+                        w["prs"].add(str(b.get("id")))
+                    out.append({"type": "tool_use", "agent_id": aid, "tool": name, "summary": summary})
                     if name == "TodoWrite":
                         out.append({"type": "todos", "agent_id": aid, "todos": todo_items(inp)})
                     if name in ("Task", "Agent") and not rec.get("isSidechain"):  # sous-agent : un stagiaire
@@ -357,7 +362,7 @@ class Observer:
             for b in blocks:
                 if b.get("type") == "tool_result":
                     out.append({"type": "tool_result", "agent_id": aid,
-                                "tool": w["tools"].pop(str(b.get("tool_use_id")), "?"),
+                                "tool": w["tools"].pop(str(b.get("tool_use_id")), ("?",))[0],
                                 "ok": not b.get("is_error"),
                                 **({"pr": True} if str(b.get("tool_use_id")) in w["prs"] else {})})
                     w["prs"].discard(str(b.get("tool_use_id")))

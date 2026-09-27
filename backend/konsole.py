@@ -95,6 +95,19 @@ async def dbus_call(service: str, path: str, method: str, *args: str) -> str:
 
 async def send_prompt(pid: int, text: str) -> str | None:
     """Tape `text` puis Entrée dans l'onglet Konsole de la session `pid`. None si envoyé, sinon la raison."""
+    body = sanitize(text)
+    if "\n" in body:  # bracketed paste : un seul message, pas une validation par ligne
+        body = PASTE_START + body + PASTE_END
+    return await _send(pid, body, "\r")
+
+
+async def send_keys(pid: int, keys: str) -> str | None:
+    """Envoie `keys` tel quel (sans Entrée) dans l'onglet de la session `pid`. None si envoyé, sinon la raison."""
+    return await _send(pid, keys)
+
+
+async def _send(pid: int, *texts: str) -> str | None:
+    """`sendText` de chaque texte, seulement si Claude (`pid`) est au premier plan de son onglet."""
     loc = locate(pid)
     if loc is None:
         return "Onglet Konsole introuvable (session lancée hors de Konsole ?)."
@@ -102,11 +115,8 @@ async def send_prompt(pid: int, text: str) -> str | None:
         if parse_pid(await dbus_call(*loc, FG)) != pid:
             return "Claude n'est pas au premier plan de son onglet Konsole : rien n'a été envoyé."
         # ponytail: pas de verrou entre la vérification et l'envoi (quelques ms) : fenêtre acceptée
-        body = sanitize(text)
-        if "\n" in body:  # bracketed paste : un seul message, pas une validation par ligne
-            body = PASTE_START + body + PASTE_END
-        await dbus_call(*loc, SEND, body)
-        await dbus_call(*loc, SEND, "\r")
+        for t in texts:
+            await dbus_call(*loc, SEND, t)
     except Exception as exc:  # gdbus absent, D-Bus en panne, timeout, onglet fermé…
         if "DBus.Error.AccessDenied" in str(exc):  # API sensible désactivée (message traduit selon la langue)
             return ("Konsole refuse l'envoi : active « Enable the security sensitive parts of the DBus API » "
