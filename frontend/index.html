@@ -461,8 +461,9 @@ const GLYPHS = {
   todo: ["00000", "00001", "10010", "01100", "00000"],
   coffee: ["01010", "00000", "11110", "11101", "11110"],
   agent: ["01010", "01010", "00000", "11011", "11011"],
+  done: ["00000", "00001", "00010", "10100", "01000"],
 };
-const GLYPH_COL = { think: "#735646", ask: "#c8475f", read: "#8a5a3b", edit: "#3f7fa0", bash: "#2f3542", web: "#3f7fa0", todo: "#4f8a3d", coffee: "#6e4630", agent: "#8f6bb3" };
+const GLYPH_COL = { think: "#735646", ask: "#c8475f", read: "#8a5a3b", edit: "#3f7fa0", bash: "#2f3542", web: "#3f7fa0", todo: "#4f8a3d", coffee: "#6e4630", agent: "#8f6bb3", done: "#2e9e4f" };
 function bubble(x, y, icon, t) {
   if (!icon) return;
   if (icon === "ask" && Math.floor(t / 300) % 2) return;
@@ -593,13 +594,15 @@ function updateAgent(a, dt) {
   if (a.gone) return;
   const idle = a.observed ? (a.status === "busy" ? "Tape dans son terminal" : "Inactif") : "Disponible";
   // Session terminal : en attente de toi → ton bureau ; inactive → coin café ; au travail → sa place
-  const home = !a.observed || a.status === "busy" ? "seat" : a.status === "waiting" ? "manager" : "coffee", h = spotFor(a, home);
-  const waitLabel = "Attend ton retour" + (a.waitingFor ? " (" + a.waitingFor + ")" : "");
+  // A fini (#68) : il vient à ton bureau jusqu'à ce que tu ouvres sa discussion ou qu'il reparte au travail
+  const home = a.done ? "manager" : !a.observed || a.status === "busy" ? "seat" : a.status === "waiting" ? "manager" : "coffee", h = spotFor(a, home);
+  const mgr = a.done ? { icon: "done", label: "A fini : clique pour lire sa réponse" }
+    : { icon: "ask", label: "Attend ton retour" + (a.waitingFor ? " (" + a.waitingFor + ")" : "") };
   if (a.x !== h.x || a.y !== h.y) {
-    enqueue(a, home === "manager" ? { spot: home, icon: "ask", dwell: 0, label: waitLabel }
+    enqueue(a, home === "manager" ? { spot: home, dwell: 0, ...mgr }
       : { spot: home, icon: a.ticket ? "think" : null, dwell: 0, label: a.ticket ? "Réfléchit" : idle });
   } else if (home === "manager") {
-    a.icon = "ask"; a.label = waitLabel; a.dir = h.face;
+    a.icon = mgr.icon; a.label = mgr.label; a.dir = h.face;
   } else {
     a.icon = a.ticket || a.waiting ? "think" : null;
     a.label = a.pausedUntil ? "En pause jusqu'à " + fmtHour(a.pausedUntil) + " (limite d'usage)"
@@ -889,7 +892,7 @@ function openChat(a) {
   if (!a || a.gone || a.leaving) return;
   if (Chat.id === a.id) { if (!a.intern) $("#chatInput").focus(); return; }
   if (Chat.id) closeChat(true);
-  Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null;
+  Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null; a.done = false;
   $("#chatName").textContent = a.name; $("#chatProj").textContent = a.project || ""; $("#chatProj").title = a.cwd || "";
   portrait($("#chatPortrait"), a.look);
   chatStatus(""); chatWait(a); chatNote("Chargement de l'historique…");
@@ -994,7 +997,12 @@ cv.addEventListener("mousemove", e => { cv.style.cursor = agentAt(e) ? "pointer"
 const INTERN_NAMES = ["Tom", "Chloé", "Malik", "Jade", "Noé", "Zoé"]; let internSeq = 0;
 function handle(ev) {
   const a = ev.agent_id ? S.agents.get(ev.agent_id) : null;
+  // Reparti au travail ou en attente de toi : plus « fini » (même règle que le backend)
+  if (a && (["ticket_assigned", "tool_use", "permission_request"].includes(ev.type)
+    || (ev.type === "observed_status" && (ev.status === "busy" || ev.status === "waiting")))) a.done = false;
   switch (ev.type) {
+    case "agent_done": if (a) { a.done = true; log(a.name + " a fini : clique-le pour lire sa réponse."); renderTeam(); } break;
+    case "agent_seen": if (a) { a.done = false; renderTeam(); } break;
     case "hello": S.projects = ev.projects || []; ev.team.forEach(m => addAgent(m)); renderDest(); break;
     case "agent_hired": {
       const n = addAgent(ev.agent, { hired: true });
@@ -1071,7 +1079,7 @@ function handle(ev) {
     case "permission_resolved": dropPerm(ev.request_id); break;
     case "snapshot": {
       const st = { queued: "attente", assigned: "cours" };
-      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; x.pausedUntil = m.paused_until; x.commands = (ev.commands || {})[x.id]; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
+      (ev.agents || []).forEach(m => { const x = addAgent(m); x.mode = m.mode; x.pausedUntil = m.paused_until; x.commands = (ev.commands || {})[x.id]; x.done = !!m.done; if (m.observed) { x.status = m.status || "idle"; x.waitingFor = m.waiting_for; } });
       S.agents.forEach(x => { x.ticket = null; x.fatigue = ev.context[x.id] || 0; x.todos = (ev.todos || {})[x.id]; });
       S.tickets = ev.tickets.map(t => ({ id: t.id, title: t.title, status: st[t.status] || (t.ok === false ? "echec" : "fait"), agent: S.agents.get(t.agent_id) }));
       S.tickets.forEach(t => { if (t.status === "cours" && t.agent) t.agent.ticket = t; });

@@ -106,6 +106,10 @@ class Hub:
 
     def track(self, ev: dict) -> None:
         kind = ev.get("type")
+        # Reparti au travail ou en attente de toi : plus « fini » (#68)
+        if (kind in ("ticket_assigned", "tool_use", "permission_request")
+                or (kind == "observed_status" and ev.get("status") in ("busy", "waiting"))):
+            self.agents.get(ev.get("agent_id"), {}).pop("done", None)
         if kind == "ticket_created":
             self.board[ev["ticket"]["id"]] = {**ev["ticket"], "status": "queued"}
         elif kind == "ticket_assigned" and (t := self.board.get(ev["ticket_id"])):
@@ -131,6 +135,10 @@ class Hub:
             self.context.pop(ev["agent_id"], None)
             self.todos.pop(ev["agent_id"], None)
             self.chats.pop(ev["agent_id"], None)
+        elif kind == "agent_done" and (a := self.agents.get(ev["agent_id"])):
+            a["done"] = True
+        elif kind == "agent_seen" and (a := self.agents.get(ev["agent_id"])):
+            a.pop("done", None)
         elif kind == "observed_status" and (a := self.agents.get(ev["agent_id"])):
             a["status"] = ev["status"]
             a.pop("waiting_for", None)
@@ -170,6 +178,7 @@ class Hub:
                 with contextlib.suppress(Exception):
                     await ws.send_json(event)
             return
+        prev = self.agents.get(event.get("agent_id"), {}).get("status")
         self.track(event)
         for ws in list(self.clients):
             try:
@@ -177,6 +186,7 @@ class Hub:
             except Exception:
                 self.clients.discard(ws)
         await self.follow_terminal(event)
+        await self.terminal_done(event, prev)
         await terminal_permission(event)
 
     async def follow_terminal(self, ev: dict) -> None:
@@ -196,6 +206,19 @@ class Hub:
             del self.terminal[aid]
             await self.emit({"type": "ticket_done", "ticket_id": t["id"], "agent_id": aid,
                              "usd": 0.0, "tokens": 0, "ok": kind != "observed_left"})
+
+
+    async def terminal_done(self, ev: dict, prev: str | None) -> None:
+        """Session terminal qui finit sa réponse (fin lue dans le transcript, ou busy → idle) : `agent_done` (#68)."""
+        kind, aid = ev.get("type"), ev.get("agent_id")
+        if kind == "observed_turn_end" or (kind == "observed_status" and ev.get("status") == "idle" and prev == "busy"):
+            await self.signal_done(aid)
+
+    async def signal_done(self, aid: str) -> None:
+        """Employé qui a fini : il vient à ton bureau. Une fois jusqu'à sa reprise ; rien si son panneau est ouvert (déjà lu)."""
+        a = self.agents.get(aid)
+        if a and not a.get("done") and not self.chats.get(aid):
+            await self.emit({"type": "agent_done", "agent_id": aid})
 
 
 def _after(at, sent: datetime | None) -> bool:
@@ -337,6 +360,8 @@ class Employee:
                         await hub.emit({"type": "ticket_done", "ticket_id": ticket.id, "agent_id": self.id,
                                         "usd": cost, "tokens": tokens, "ok": ok and not self.interrupted,
                                         **({"reason": "interrompu"} if self.interrupted else {})})
+                    if not self.interrupted and cmd not in ("/model", "/clear"):
+                        await hub.signal_done(self.id)
                     self.tickets.task_done()
 
     async def wait_limit(self) -> bool:
@@ -756,11 +781,14 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await target.tickets.put(ticket)
             elif kind == "open_chat":
                 aid = str(data.get("agent_id"))
+                if hub.agents.get(aid, {}).get("done"):  # lu : il retourne à sa place
+                    await hub.emit({"type": "agent_seen", "agent_id": aid})
                 res = chat_transcript(aid)
                 if isinstance(res, Path):
                     res = await asyncio.to_thread(read_history, res)
                 if isinstance(res, str):
                     await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": [], "error": res})
+                    hub.chats.setdefault(aid, set()).add(ws)  # panneau ouvert quand même : sa première réponse y arrivera
                     continue
                 # ponytail: une ligne lue par l'observateur pendant la lecture peut manquer ou arriver en double
                 hub.chats.setdefault(aid, set()).add(ws)
