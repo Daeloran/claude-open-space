@@ -450,6 +450,7 @@ function person(c, x, y, p, t, moving, dir) {
     R(c, x - 3, y - 15, 6, 2, p.hair); R(c, x - 3, y - 13, 1, 2, p.hair); R(c, x + 2, y - 13, 1, 2, p.hair);
     R(c, x - 2, y - 12, 1, 1, "#2b1d16"); R(c, x + 1, y - 12, 1, 1, "#2b1d16");
   }
+  if (p.long) { R(c, x - 4, y - 14, 1, 6, p.hair); R(c, x + 3, y - 14, 1, 6, p.hair); } // cheveux longs (#72)
 }
 const GLYPHS = {
   think: ["00000", "00000", "00000", "10101", "00000"],
@@ -524,6 +525,8 @@ const OBS_LOOKS = [
   { hair: "#6b3a1f", shirt: "#2f3542", pants: "#1f2430", skin: "#f1c7a0" },
   { hair: "#c98a3b", shirt: "#2f3542", pants: "#1f2430", skin: "#d9a37a" },
 ];
+// ponytail: genre déduit du prénom ; un prénom perso d'OPENSPACE_TEAM absent d'ici est dessiné en homme (#72)
+const FEMALE = new Set(["Jaina", "Modera", "Chloé", "Jade", "Zoé", "Léa", "Inès"]);
 const MANAGER = { hair: "#4a2e1c", shirt: "#f4efe4", pants: "#2f3542", skin: "#e6b58f" };
 const S = { plan: {}, agents: new Map(), projects: [], hiring: null, tickets: [], cost: 0, tokens: 0, done: 0, perms: 0, denied: 0, coffee: 0, deliv: [], delivCount: 0, ticketCost: 0 };
 let T = 0;
@@ -542,7 +545,8 @@ function addAgent({ id, name, cwd, project, observed, status, waiting_for, mode 
   const idx = S.agents.size;
   // Stagiaires : côté nord de la table de réunion (6 places, partagées au-delà) ; employés : un bureau chacun
   const seat = opts.intern ? { x: 76 + (internSeats++ % 6) * 12, y: 134, face: "down" } : null;
-  const look = opts.look || (observed ? OBS_LOOKS[idx % OBS_LOOKS.length] : LOOKS[idx % LOOKS.length]);
+  const base = opts.look || (observed ? OBS_LOOKS[idx % OBS_LOOKS.length] : LOOKS[idx % LOOKS.length]);
+  const look = { ...base, long: FEMALE.has(String(name).replace(/ \d+$/, "")) }; // « Jaina 2 » reste Jaina
   const a = { n: idx, id, name, cwd, project, desk: -1, look, x: 0, y: 0, dir: "up", seat, path: [], queue: [], cur: null,
     arrived: true, dwell: 0, icon: null, label: "Disponible", fatigue: 0, ticket: null, intern: !!opts.intern, parent: opts.parent || null, gone: false,
     observed: !!observed, status: status || "idle", waitingFor: waiting_for, mode };
