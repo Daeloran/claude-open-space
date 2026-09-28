@@ -724,7 +724,7 @@ function checkDest() {
   const isNew = $("#dest").value === "new", other = isNew && !$("#project").value, resume = $("#dest").value === "resume";
   $("#project").hidden = !isNew; $("#cwd").hidden = !other; $("#session").hidden = !resume;
   if (resume && !$("#session").options.length) { $("#session").add(new Option("Chargement…", "")); transport.send({ type: "list_sessions" }); }
-  $("#send").disabled = (other && !$("#cwd").value.trim()) || (resume && !$("#session").value);
+  $("#send").disabled = (other && !$("#cwd").value.trim()) || resume; // reprise : au choix de la conversation (#73)
 }
 function renderStats() {
   $("#sClock").textContent = clock();
@@ -1007,9 +1007,7 @@ function handle(ev) {
     case "agent_hired": {
       const n = addAgent(ev.agent, { hired: true });
       if (S.hiring === n.cwd) { S.hiring = null; $("#dest").value = n.id; checkDest(); }
-      if (S.resuming && ev.agent.resumed === S.resuming.sid) {
-        transport.send({ type: "new_ticket", title: S.resuming.title, agent_id: n.id }); S.resuming = null; $("#dest").value = n.id; checkDest();
-      }
+      if (S.resuming && ev.agent.resumed === S.resuming) { S.resuming = null; $("#dest").value = n.id; checkDest(); openChat(n); }
       log(n.name + " rejoint l'équipe sur le projet " + n.project + "."); break;
     }
     case "observed_joined": {
@@ -1043,7 +1041,7 @@ function handle(ev) {
       if (!s.options.length) s.add(new Option("Aucune conversation trouvée", ""));
       checkDest(); break;
     }
-    case "resume_rejected": if (S.resuming) { log("Reprise impossible : " + ev.reason); $("#ticketTitle").value ||= S.resuming.title; S.resuming = null; } break;
+    case "resume_rejected": if (S.resuming) { log("Reprise impossible : " + ev.reason); S.resuming = null; } break;
     case "paused": if (a) { a.pausedUntil = ev.until; log(a.name + " a atteint la limite d'usage, reprise à " + fmtHour(ev.until) + "."); } break;
     case "resumed": if (a) a.pausedUntil = null; break;
     case "mode_changed": if (a) { a.mode = ev.mode; log(a.name + " passe en mode " + ev.mode + "."); } break;
@@ -1374,16 +1372,19 @@ function startLive() {
 
 ["#dest", "#project", "#session"].forEach(s => $(s).addEventListener("change", checkDest));
 $("#dest").addEventListener("change", () => { $("#dest").dataset.chosen = 1; });
+// Reprise dès le choix : l'employé est recruté sur la conversation, sans ticket ; le brouillon reste (#73)
+$("#session").addEventListener("change", () => {
+  const sid = $("#session").value; if ($("#dest").value !== "resume" || !sid) return;
+  S.resuming = sid; transport.send({ type: "resume", session_id: sid });
+  $("#session").replaceChildren(); $("#ticketDlg").close(); // liste rafraîchie au prochain choix
+});
 $("#cwd").addEventListener("input", checkDest);
 $("#newTicket").addEventListener("submit", e => {
   e.preventDefault();
   const v = $("#ticketTitle").value.trim(); if (!v || $("#send").disabled) return;
   const dest = $("#dest").value, cwd = $("#project").value || $("#cwd").value.trim();
   if (dest === "new") S.hiring = cwd;
-  // Reprise : l'employé est recruté sur la conversation, puis reçoit ce ticket (cf. agent_hired)
-  if (dest === "resume") { S.resuming = { sid: $("#session").value, title: v }; transport.send({ type: "resume", session_id: S.resuming.sid }); }
-  else transport.send(dest === "new" ? { type: "new_ticket", title: v, cwd } : { type: "new_ticket", title: v, agent_id: dest });
-  if (dest === "resume") $("#session").replaceChildren(); // liste rafraîchie au prochain choix
+  transport.send(dest === "new" ? { type: "new_ticket", title: v, cwd } : { type: "new_ticket", title: v, agent_id: dest });
   $("#ticketTitle").value = ""; $("#cwd").value = ""; checkDest(); $("#ticketDlg").close();
 });
 // Fenêtre de rédaction : Échap / Annuler ferme sans envoyer, le brouillon reste
