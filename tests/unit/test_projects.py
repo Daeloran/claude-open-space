@@ -65,3 +65,14 @@ def test_sessions_reprenables_titre_et_live(tmp_path):
     assert [s["session_id"] for s in got] == ["s-2", "s-1"]
     assert got[0]["live"] is True and "live" not in got[1]
     assert got[1]["title"] == "Corrige le bug" and got[1]["project"] == "app"
+
+
+def test_conversation_title_window_and_garbage(tmp_path):
+    from backend.projects import conversation_title
+    f = tmp_path / "s.jsonl"
+    lines = ['{"type":"ai-title","aiTitle":"Loin au début"}', "x" * 2000, "pas du json -title\"",
+             '{"type":"ai-title","aiTitle":"  Titre   IA  "}', '{"type":"custom-title","customTitle":"   "}']
+    f.write_text("\n".join(lines) + "\n")
+    assert conversation_title(f) == "Titre IA"  # custom-title vide ignoré, espaces normalisés
+    assert conversation_title(f, window=100) == "Titre IA"  # fenêtre coupe le début, ligne partielle ignorée
+    assert conversation_title(tmp_path / "absent.jsonl") == ""
