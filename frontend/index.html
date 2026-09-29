@@ -143,6 +143,21 @@ ul{list-style:none;margin:0;padding:0}
 @keyframes slide{from{transform:translateY(48px)}to{transform:none}}
 @media (prefers-reduced-motion:reduce){.chat{animation:none}}
 @media (max-width:560px){.chat{box-shadow:none}}
+/* Équipe dans le panneau (#76) : colonne de gauche quand la largeur le permet */
+.chat-team{display:none}
+@media (min-width:880px){
+  .chat{display:grid;grid-template-columns:200px minmax(0,1fr);grid-template-rows:auto auto auto auto minmax(0,1fr) auto}
+  .chat>.grip,.chat>header{grid-column:1/-1}
+  .chat>.wait{grid-area:3/2}.chat>.state{grid-area:4/2}.chat>.chat-log{grid-area:5/2}.chat>form{grid-area:6/2}
+  .chat-team{display:block;grid-column:1;grid-row:3/-1;overflow-y:auto;margin:0;padding:4px 0;list-style:none;border-right:2px solid var(--chat-rule);overscroll-behavior:contain}
+  .chat-team li{display:grid;grid-template-columns:24px minmax(0,1fr);gap:0 8px;align-items:center;padding:5px 10px;cursor:pointer}
+  .chat-team li:hover,.chat-team li:focus-visible{background:var(--chat-rule)}
+  .chat-team li[aria-current]{background:var(--bubble-user);font-weight:600}
+  .chat-team canvas{width:24px;height:30px;image-rendering:pixelated;grid-row:span 2;background:var(--shadow)}
+  .chat-team b,.chat-team small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chat-team b{font-weight:inherit}.chat-team small{color:var(--chat-soft)}
+  .chat-team li.done small{color:var(--berry);font-weight:600}
+}
 .grip{flex:none;height:12px;cursor:ns-resize;touch-action:none}
 .grip::before{content:"";display:block;width:48px;height:4px;margin:4px auto;background:var(--chat-rule)}
 .grip:focus-visible{outline:2px solid var(--link);outline-offset:-2px}
@@ -308,6 +323,7 @@ ul{list-style:none;margin:0;padding:0}
     <button type="button" id="chatDismiss" title="Congédier : il quitte l'open space">Congédier</button>
     <button type="button" id="chatClose" title="Fermer (Échap)">Fermer</button>
   </header>
+  <ul class="chat-team" id="chatTeam" aria-label="Équipe"></ul>
   <p class="wait" id="chatWait" role="status" hidden></p>
   <details class="state" id="chatState" open><summary id="chatSum"></summary><ul id="chatTodos"></ul></details>
   <div class="chat-log" id="chatLog" aria-live="polite"></div>
@@ -684,7 +700,7 @@ function portrait(canvas, look) {
 function renderTeam() {
   const ul = $("#team");
   S.agents.forEach(a => {
-    if (a.gone) { a.el && a.el.remove(); a.el = null; return; }
+    if (a.gone) { a.el && a.el.remove(); a.chatEl && a.chatEl.remove(); a.el = a.chatEl = null; return; }
     if (!a.el) {
       a.el = document.createElement("li");
       a.el.innerHTML = '<canvas width="16" height="20"></canvas><div class="name"></div><div class="status"></div><div class="bar">Fatigue <i><b></b></i></div>';
@@ -704,7 +720,18 @@ function renderTeam() {
         x.onclick = e => { e.stopPropagation(); dismiss(a); }; a.el.querySelector(".name").append(x);
       }
       ul.appendChild(a.el);
+      // Entrée compacte dans le panneau de discussion (#76) : portrait, nom, statut
+      a.chatEl = document.createElement("li");
+      a.chatEl.innerHTML = '<canvas width="16" height="20"></canvas><b></b><small></small>';
+      portrait(a.chatEl.querySelector("canvas"), a.look);
+      a.chatEl.querySelector("b").textContent = a.intern ? a.name + " (stagiaire)" : a.name;
+      a.chatEl.tabIndex = 0; a.chatEl.setAttribute("role", "button"); a.chatEl.onclick = a.el.onclick; a.chatEl.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openChat(a); } };
+      $("#chatTeam").appendChild(a.chatEl);
     }
+    a.chatEl.querySelector("small").textContent = a.done ? "A fini : réponse à lire" : a.label;
+    a.chatEl.classList.toggle("done", !!a.done);
+    a.chatEl.title = "Discuter avec " + a.name + (a.project ? " (" + a.project + ")" : "");
+    if (Chat.id === a.id) a.chatEl.setAttribute("aria-current", "true"); else a.chatEl.removeAttribute("aria-current");
     a.el.querySelector(".status").textContent = a.label + (a.mode && a.mode !== "default" ? " · " + a.mode : "") + (todoCount(a) ? " · " + todoCount(a) : "");
     const b = a.el.querySelector(".bar b"); const f = Math.max(0, Math.min(1, a.fatigue));
     b.style.width = Math.round(f * 100) + "%";
@@ -902,7 +929,7 @@ function openChat(a) {
   portrait($("#chatPortrait"), a.look);
   chatStatus(""); chatWait(a); chatNote("Chargement de l'historique…");
   $("#chat").hidden = false; $("#chatForm").hidden = !!a.intern; // stagiaire : lecture seule, il reste à son travail
-  transport.send({ type: "open_chat", agent_id: a.id });
+  transport.send({ type: "open_chat", agent_id: a.id }); renderTeam();
   if (a.intern) return;
   // Il vient au bureau du manager et y reste tant que le panneau est ouvert
   a.chatting = true; Chat.act = { spot: "manager", icon: null, hold: true, label: "Discute avec toi" };
