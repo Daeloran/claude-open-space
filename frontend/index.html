@@ -912,6 +912,7 @@ function chatWait(a) {
   $("#chatWait").hidden = !w; $("#chatInput").disabled = w;
   $("#chatWait").textContent = w ? "En attente de ta réponse dans son terminal" + (a.waitingFor ? " : " + a.waitingFor : "") : "";
 }
+function chatTitle(a, title) { const p = $("#chatProj"); p.textContent = [a.project, title].filter(Boolean).join(" · "); p.title = [title, a.cwd].filter(Boolean).join("\n"); }
 function chatStatus(text, err) { $("#chatStatus").textContent = text; $("#chatStatus").classList.toggle("err", !!err); }
 function dismiss(a) {
   if (!a || a.leaving || a.gone) return;
@@ -924,7 +925,7 @@ function openChat(a) {
   if (Chat.id === a.id) { if (!a.intern) $("#chatInput").focus(); return; }
   if (Chat.id) closeChat(true);
   Chat.id = a.id; Chat.back = document.activeElement; Chat.sent = null; a.done = false;
-  $("#chatName").textContent = a.name; $("#chatProj").textContent = a.project || ""; $("#chatProj").title = a.cwd || "";
+  $("#chatName").textContent = a.name; chatTitle(a, "");
   portrait($("#chatPortrait"), a.look);
   chatStatus(""); chatWait(a); chatNote("Chargement de l'historique…");
   $("#chat").hidden = false; $("#chatForm").hidden = !!a.intern; // stagiaire : lecture seule, il reste à son travail
@@ -1139,10 +1140,12 @@ function handle(ev) {
     }
     case "chat_history":
       if (ev.agent_id !== Chat.id) break;
+      if (a) chatTitle(a, ev.title);
       if (ev.error) chatNote(ev.error);
       else if (!(ev.entries || []).length) chatNote("Rien à afficher pour l'instant.");
       else { chatLog.replaceChildren(); chatAppend(ev.entries, true); }
       break;
+    case "chat_title": if (a && ev.agent_id === Chat.id) chatTitle(a, ev.title); break;
     case "chat_entry": if (ev.agent_id === Chat.id && ev.entry) chatAppend([ev.entry]); break;
     case "deliverable": S.deliv.push({ path: ev.path, kind: ev.kind }); S.delivCount++; break;
     case "context": if (a) a.fatigue = ev.ratio; break;

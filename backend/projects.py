@@ -28,6 +28,30 @@ def first_cwd(path: Path, max_lines: int = MAX_LINES) -> str | None:
     return None
 
 
+def conversation_title(path: Path, window: int = 256 * 1024) -> str:
+    """Titre de la conversation : dernier `custom-title` (/rename), sinon dernier `ai-title`, lus dans la fin du transcript ; '' sinon."""
+    # ponytail: titre absent des `window` derniers octets ignoré (le CLI le réécrit régulièrement)
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, f.seek(0, os.SEEK_END) - window))
+            data = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    found = {}
+    for line in data.splitlines():
+        if '-title"' not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and rec.get("type") in ("custom-title", "ai-title"):
+            key = "customTitle" if rec["type"] == "custom-title" else "aiTitle"
+            if isinstance(rec.get(key), str) and rec[key].strip():
+                found[rec["type"]] = " ".join(rec[key].split())
+    return found.get("custom-title") or found.get("ai-title") or ""
+
+
 def _mtime(path: Path) -> float:
     try:
         return path.stat().st_mtime
@@ -67,7 +91,7 @@ def _prompt_text(rec: dict) -> str:
 
 
 def resumable_sessions(config_dir: Path, live: set[str], limit: int = 30) -> list[dict]:
-    """Sessions reprenables, plus récentes d'abord : id, dossier, titre (premier prompt), date ; `live` si un
+    """Sessions reprenables, plus récentes d'abord : id, dossier, titre (`conversation_title`, sinon premier prompt), date ; `live` si un
     processus CLI la tient encore."""
     out = []
     for f in sorted(Path(config_dir).glob("projects/*/*.jsonl"), key=_mtime, reverse=True):
@@ -91,7 +115,7 @@ def resumable_sessions(config_dir: Path, live: set[str], limit: int = 30) -> lis
             continue
         if not cwd:
             continue
-        out.append({"session_id": f.stem, "cwd": cwd, "project": Path(cwd).name, "title": title[:80],
+        out.append({"session_id": f.stem, "cwd": cwd, "project": Path(cwd).name, "title": (conversation_title(f) or title)[:80],
                     "updated": datetime.fromtimestamp(_mtime(f), timezone.utc).isoformat(timespec="seconds"),
                     **({"live": True} if f.stem in live else {})})
         if len(out) >= limit:

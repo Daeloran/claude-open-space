@@ -41,7 +41,7 @@ from .events import INTERN_NAMES, ask_questions, deliverable_for, is_pr_command,
 from .observer import Observer, TranscriptTail, chat_entries, chat_history, intern_updates, subagent_file
 from .plan_usage import PlanUsage
 from . import observer as observer_mod
-from .projects import first_cwd, recent_projects, resumable_sessions
+from .projects import conversation_title, first_cwd, recent_projects, resumable_sessions
 
 WORKDIR = os.environ.get("OPENSPACE_CWD")  # projet proposé en tête de liste
 # Réserve de prénoms pour les recrutements (cyclique, suffixée une fois épuisée)
@@ -173,7 +173,7 @@ class Hub:
                 "deliverable_count": self.deliverable_count, "coffee": self.coffee, "permissions": dict(self.permissions)}
 
     async def emit(self, event: dict) -> None:
-        if event.get("type") == "chat_entry":  # contenu de conversation : panneaux abonnés seulement, hors snapshot
+        if event.get("type") in ("chat_entry", "chat_title"):  # contenu de conversation : panneaux abonnés seulement, hors snapshot
             for ws in list(self.chats.get(event.get("agent_id"), ())):
                 with contextlib.suppress(Exception):
                     await ws.send_json(event)
@@ -216,6 +216,9 @@ class Hub:
 
     async def signal_done(self, aid: str) -> None:
         """Employé qui a fini : il vient à ton bureau. Une fois jusqu'à sa reprise ; rien si son panneau est ouvert (déjà lu)."""
+        # Panneau ouvert : son titre de conversation a pu changer pendant la réponse (#77)
+        if self.chats.get(aid) and isinstance(p := chat_transcript(aid), Path) and (t := await asyncio.to_thread(conversation_title, p)):
+            await self.emit({"type": "chat_title", "agent_id": aid, "title": t})
         a = self.agents.get(aid)
         if a and not a.get("done") and not self.chats.get(aid):
             await self.emit({"type": "agent_done", "agent_id": aid})
@@ -784,7 +787,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if hub.agents.get(aid, {}).get("done"):  # lu : il retourne à sa place
                     await hub.emit({"type": "agent_seen", "agent_id": aid})
                 res = chat_transcript(aid)
+                title = ""
                 if isinstance(res, Path):
+                    title = await asyncio.to_thread(conversation_title, res)
                     res = await asyncio.to_thread(read_history, res)
                 if isinstance(res, str):
                     await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": [], "error": res})
@@ -792,7 +797,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     continue
                 # ponytail: une ligne lue par l'observateur pendant la lecture peut manquer ou arriver en double
                 hub.chats.setdefault(aid, set()).add(ws)
-                await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": res})
+                await ws.send_json({"type": "chat_history", "agent_id": aid, "entries": res, "title": title})
             elif kind == "list_sessions":
                 sessions = await asyncio.to_thread(resumable_sessions, CLAUDE_CONFIG_DIR, live_session_ids())
                 await ws.send_json({"type": "sessions", "sessions": sessions})
